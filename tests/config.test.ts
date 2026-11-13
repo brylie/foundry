@@ -45,9 +45,15 @@ bot_timeout_minutes: 45
 
   test('doc folders are set per kind, inside the repository only', async () => {
     const { config, problems } = readConfig('requirements: [docs/prd/]\nspecifications:\n  - ./docs/specs\n  - ../elsewhere\ndecisions: [docs/adr]\n')
-    expect(problems).toEqual(['"specifications": ../elsewhere is not a path inside the repository'])
+    expect(problems).toEqual(['"specifications": ../elsewhere is not a folder or file inside the repository (the root itself is not allowed)'])
     const merged = mergeSettings(PLUGIN, config)
     expect(merged.docs).toEqual({ requirements: ['docs/prd'], specifications: ['docs/specs'], decisions: ['docs/adr'], user: [] })
+  })
+
+  test('the repository root is no doc folder, however it is spelled', async () => {
+    const { config, problems } = readConfig('requirements: [., ./, ././]\ndecisions: [./docs/./adr]\n')
+    expect(problems).toEqual(['"requirements": ., ./, ././ is not a folder or file inside the repository (the root itself is not allowed)'])
+    expect(config.docs).toEqual({ requirements: [], decisions: ['docs/adr'] })
   })
 
   test('mistakes are reported, not guessed, and never weaken the rules', async () => {

@@ -980,9 +980,12 @@ export const register: Register = (on, options) => {
         const placed = absoluteTarget(target, cwd)
         // A target the guard can't place ($VAR, ~, a substitution) is judged as a write into the repository.
         const path = placed === undefined ? `${root}/${UNPLACED}` : await realPath($, placed)
+        // A target it can't place is never a doc edit: it is checked against no doc folders at all,
+        // so however broad a doc folder is, the write is held wherever code is.
+        const within = placed === undefined ? [] : folders
         const why = isReviewer
-          ? reviewerEditRefusal(isActive(batch) ? batch : undefined, root, path, folders)
-          : editRefusal(batch as Batch, root, path, folders)
+          ? reviewerEditRefusal(isActive(batch) ? batch : undefined, root, path, within)
+          : editRefusal(batch as Batch, root, path, within)
         if (why) {
           const where = placed === undefined ? `${target}, which Foundry can't place: name the path literally` : target
 

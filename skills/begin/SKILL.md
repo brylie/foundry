@@ -68,7 +68,7 @@ If the app's session tools are available, also list the running sessions (`mcp__
 - **Pick** the group with the most high-priority work that can be built now, following the board's order.
 
 **Set up the branch first,** so the doc folders are found on the up-to-date code and the docs pass writes on the branch:
-- **On the base branch:** make a new branch named for the theme.
+- **On the base branch:** make a new branch named for the theme, from the fetched base, not the local one, which a fetch doesn't move: `git switch -c <branch> origin/<base>`.
 - **On a worktree branch with no commits of its own:** stay on it, and bring it up to date with `origin/<base>`.
 - **On a branch with commits that are not part of this work:** stop and ask.
 

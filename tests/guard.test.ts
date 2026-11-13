@@ -2,6 +2,7 @@ import { describe, expect, test } from 'claude-code/testing'
 
 import type { Batch } from '../types'
 import {
+  UNPLACED,
   absoluteTarget,
   bashActions,
   editRefusal,
@@ -95,6 +96,15 @@ describe('docs first', () => {
     expect(reviewerEditRefusal(at('build'), '/repo', '/tmp/review-notes.md')).toBeUndefined()
     // A path it can't place is judged as one inside the repository.
     expect(reviewerEditRefusal(at('build'), '/repo', 'src/slot.rs')).toContain("doesn't edit the repository")
+  })
+
+  test('a write the guard cannot place is held even when a doc folder is as broad as the root', async () => {
+    const broad = at('plan', { docs: { ...DOCS, requirements: ['.'] } })
+    const unplaced = `/repo/${UNPLACED}`
+    // Checked against doc folders, the root-wide folder would let it through: so it is checked against none.
+    expect(editRefusal(broad, '/repo', unplaced)).toBeUndefined()
+    expect(editRefusal(broad, '/repo', unplaced, [])).toContain('no approved plan')
+    expect(reviewerEditRefusal(broad, '/repo', unplaced, [])).toContain("doesn't edit the repository")
   })
 
   test('$PWD is placed; any other variable, ~ or a substitution is not', async () => {

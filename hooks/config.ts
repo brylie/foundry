@@ -38,10 +38,16 @@ const DOC_KEYS: Record<string, keyof DocFolders> = {
 
 /** A doc path inside the repository, without a leading `./` or a trailing `/`; undefined for one that leaves it. */
 export function docPath(path: string): string | undefined {
-  const clean = path.trim().replace(/^\.\//, '').replace(/\/+$/, '')
-  if (clean === '' || clean.startsWith('/') || clean.startsWith('~') || clean.split('/').includes('..')) return undefined
+  // `.` segments are dropped, so `./docs/./adr` is `docs/adr`; what is left must name something below the root.
+  const parts = path
+    .trim()
+    .split('/')
+    .filter(part => part !== '' && part !== '.')
+  if (path.trim().startsWith('/') || path.trim().startsWith('~') || parts.includes('..')) return undefined
+  // The root itself is no doc folder: as one, the plan stage would open the whole repository to edits.
+  if (parts.length === 0) return undefined
 
-  return clean
+  return parts.join('/')
 }
 
 function stripComment(line: string): string {
@@ -147,7 +153,9 @@ export function readConfig(text: string): { config: RepoConfig; problems: string
       }
       const paths = list.map(docPath)
       const outside = list.filter((_, i) => paths[i] === undefined)
-      if (outside.length > 0) problems.push(`"${key}": ${outside.join(', ')} is not a path inside the repository`)
+      if (outside.length > 0) {
+        problems.push(`"${key}": ${outside.join(', ')} is not a folder or file inside the repository (the root itself is not allowed)`)
+      }
       config.docs = { ...config.docs, [kind]: [...new Set(paths.filter((p): p is string => p !== undefined))] }
       continue
     }
