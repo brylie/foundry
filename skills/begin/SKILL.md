@@ -67,12 +67,12 @@ If the app's session tools are available, also list the running sessions (`mcp__
 - **Size.** Aim for 5 to 10 issues in about 2,000 changed lines or fewer, not counting tests and generated files. Chores land near 10, features near 5. Do not pad: a smaller honest group is better.
 - **Pick** the group with the most high-priority work that can be built now, following the board's order.
 
-Then call `mcp__foundry__batch_start` with the pull request title and the issues, lead first. The mod labels the issues, writes the batch's state comment on the lead issue, and opens the panel. Its answer lists the batch's **doc folders** (requirements, specifications, decisions, user docs), from the repository's `foundry.yaml` or found in the checkout. From here the plan stage holds the code still: only those first three doc folders may change.
-
-**Set up the branch now,** so the docs pass writes on it:
+**Set up the branch first,** so the doc folders are found on the up-to-date code and the docs pass writes on the branch:
 - **On the base branch:** make a new branch named for the theme.
 - **On a worktree branch with no commits of its own:** stay on it, and bring it up to date with `origin/<base>`.
 - **On a branch with commits that are not part of this work:** stop and ask.
+
+Then call `mcp__foundry__batch_start` with the pull request title and the issues, lead first. The mod labels the issues, writes the batch's state comment on the lead issue, and opens the panel. Its answer lists the batch's **doc folders** (requirements, specifications, decisions, user docs), from the repository's `foundry.yaml` or found in the checkout. From here the plan stage holds the code still: only those first three doc folders may change.
 
 ## 2. The plan loop
 
@@ -98,7 +98,14 @@ Then call `mcp__foundry__batch_start` with the pull request title and the issues
 2. When it reports back, spawn `foundry:architecture` **as author**, giving it:
    - the same material, plus the product owner's report;
    - the task: write the technical design into the specification beside the product owner's section, and add or update a decision record for each significant choice.
-3. Read the doc diff (`git diff -- <requirement, specification and decision folders>`). Bring the plan in line with it: the docs and the plan must describe the same thing.
+3. Read the doc diff, new files included. Mark new files intent-to-add first, so `git diff` shows them:
+
+   ```bash
+   git add --intent-to-add -- <requirement, specification and decision folders>
+   git diff -- <requirement, specification and decision folders>
+   ```
+
+   Bring the plan in line with it: the docs and the plan must describe the same thing. The same diff, new documents and all, goes to the reviewers.
 
 The authors work one after the other, not in parallel: the specification builds on the requirements. They may edit only those doc folders, and only until the plan sign-off; the mod refuses the rest.
 

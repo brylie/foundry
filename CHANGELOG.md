@@ -14,6 +14,12 @@ Documentation is now a first-class part of the loop.
 
 **Changed:** the default reviewers now include `documentation`, so a batch needs six approvals instead of five. To keep five for a repository, set `reviewers` in its `foundry.yaml`.
 
+**Upgrading:** a batch 0.1.0 started still reads, with its stage, reviews and pending decision kept. It has no doc folders, so its plan stage stays closed to doc edits too. A batch started on 0.2.0 finds its folders.
+
+**Guard:**
+- Edits are judged by their real path, with symbolic links resolved, so a link inside a doc folder can't carry a write into the code.
+- A shell write to `$PWD` is placed in the session's folder. A target the guard can't place, such as another variable, `~` or a command substitution, is held like a write into the repository.
+
 ## 0.1.0
 
 The first release.

@@ -203,7 +203,8 @@ export function isReviewerAgent(type: string | undefined): boolean {
  * docs while the batch is planning, and no reviewer edits anything else.
  */
 export function reviewerEditRefusal(batch: Batch | undefined, root: string, path: string): string | undefined {
-  if (!path.startsWith('/') || !isInside(root, path)) return undefined
+  // A path that isn't absolute can't be placed, so it is judged as one inside the repository.
+  if (path.startsWith('/') && !isInside(root, path)) return undefined
   if (batch !== undefined && batch.stage === 'plan' && batch.waiting === undefined && isPlanDoc(batch, root, path)) return undefined
 
   return "Foundry: a reviewer agent doesn't edit the repository. In the plan loop the product owner and architecture may edit only the requirements, specification and decision docs; everything else is the oversight agent's to change."
@@ -363,7 +364,13 @@ export function shellWriteTargets(command: string): string[] {
 
 /** A shell target as an absolute path: relative ones are read from the session's folder; `~` is outside any repository. */
 export function absoluteTarget(target: string, cwd: string): string | undefined {
-  if (target.startsWith('~') || target.startsWith('$')) return undefined
+  // `$PWD` is the session's folder. Any other variable, `~` or a command substitution can't be read here,
+  // so it comes back undefined and the guard treats the write as one it cannot place.
+  const resolved = target.replace(/^(\$PWD|\$\{PWD\})(?=\/|$)/, cwd)
+  if (resolved.startsWith('~') || /[$`]/.test(resolved)) return undefined
 
-  return target.startsWith('/') ? target : `${cwd}/${target}`
+  return resolved.startsWith('/') ? resolved : `${cwd}/${resolved}`
 }
+
+/** Where a shell write's target can't be placed, the guards judge it as a write into the repository. */
+export const UNPLACED = '\u0000unplaced'

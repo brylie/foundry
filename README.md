@@ -134,7 +134,7 @@ In the desktop app: click + next to the prompt box, then Plugins, then Add marke
 
 | Option | Default | Meaning |
 |---|---|---|
-| `reviewers` | `product-owner,usability,accessibility,architecture,security` | Comma-separated review perspectives. Every one must approve before a sign-off goes to you. An empty list means the defaults. |
+| `reviewers` | `product-owner,usability,accessibility,architecture,security,documentation` | Comma-separated review perspectives. Every one must approve before a sign-off goes to you. An empty list means the defaults. |
 | `maxRounds` | `3` | Review rounds per stage before it escalates to you. CI reruns for flaky tests don't count. |
 | `onlineReviewers` | `coderabbitai[bot]` | The automated reviewers that must review a PR's head commit. Codecov belongs in CI, as its status check. |
 | `maintainers` | *(the signed-in account)* | People whose PR comments count as reviewer feedback, never as sign-off. |

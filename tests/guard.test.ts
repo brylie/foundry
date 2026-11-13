@@ -93,6 +93,16 @@ describe('docs first', () => {
     expect(reviewerEditRefusal(signoff, '/repo', '/repo/docs/product/requirements.md')).toContain("doesn't edit the repository")
     // Its own notes outside the repository are its own business.
     expect(reviewerEditRefusal(at('build'), '/repo', '/tmp/review-notes.md')).toBeUndefined()
+    // A path it can't place is judged as one inside the repository.
+    expect(reviewerEditRefusal(at('build'), '/repo', 'src/slot.rs')).toContain("doesn't edit the repository")
+  })
+
+  test('$PWD is placed; any other variable, ~ or a substitution is not', async () => {
+    expect(absoluteTarget('$PWD/src/a.ts', '/repo')).toBe('/repo/src/a.ts')
+    expect(absoluteTarget('${PWD}/src/a.ts', '/repo')).toBe('/repo/src/a.ts')
+    expect(absoluteTarget('$OUT/a.ts', '/repo')).toBeUndefined()
+    expect(absoluteTarget('~/code/repo/a.ts', '/repo')).toBeUndefined()
+    expect(absoluteTarget('$(pwd)/a.ts', '/repo')).toBeUndefined()
   })
 })
 

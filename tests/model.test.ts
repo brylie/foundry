@@ -135,6 +135,16 @@ describe('review findings', () => {
     expect(batch.log[0]?.n).toBe(12)
   })
 
+  test('a record 0.1.0 wrote, with no doc folders, still reads, its stage and reviews kept', async () => {
+    const reviewed = review(start(), 'security', 'revise').batch
+    const { docs: _, ...old } = { ...reviewed, waiting: { kind: 'signoff' as const, summary: 's', at: 1 } }
+    const body = renderState(reviewed).replace(/```json\n[\s\S]*?\n```/, '```json\n' + JSON.stringify({ foundry: 1, batch: old }) + '\n```')
+    const read = parseState(body)
+    expect(read?.docs).toEqual({ requirements: [], specifications: [], decisions: [], user: [] })
+    expect(read?.reviews).toEqual(reviewed.reviews)
+    expect(read?.waiting?.kind).toBe('signoff')
+  })
+
   test('a state record missing fields is skipped, not trusted', async () => {
     const partial = '<!-- foundry:state -->\n```json\n{"foundry":1,"batch":{"lead":12}}\n```'
     expect(parseState(partial)).toBeUndefined()

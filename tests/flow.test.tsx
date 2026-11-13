@@ -570,6 +570,27 @@ test('docs come first: the plan loop writes requirements and specs, and a review
   expect((await $.tool.call({ tool: 'Write', file_path: '/repo/src/slot.rs', content: 'x' })).deny).toBeUndefined()
 })
 
+test('a link inside a doc folder, or a shell target the guard cannot place, carries no write into the code', async ($, on) => {
+  const { ran } = engine(on)
+  on('agent.list', () => ({ value: [{ id: 'po-1', type: 'foundry:product-owner', description: 'requirements', status: 'running' }] as never }))
+  // docs/product/code is a link to src.
+  on('fs.stat', (_, e) => ({
+    value: { kind: 'file', size: 0, mtimeMs: 0, isLink: false, realPath: e.path.replace(/^\/repo\/docs\/product\/code(?=\/|$)/, '/repo/src') } as never,
+  }))
+  await $.session.start({ cwd: '/repo', surface: 'desktop', isInteractive: true })
+  await $.tool.call({ tool: 'mcp__foundry__batch_start', title: 'T', issues: [12] })
+
+  const throughLink = { tool: 'Write', file_path: '/repo/docs/product/code/slot.rs', content: 'x' } as const
+  expect((await $.tool.call({ ...throughLink, agentId: 'po-1' })).deny).toContain("doesn't edit")
+  expect((await $.tool.call(throughLink)).deny).toContain('no approved plan')
+  expect((await $.tool.call({ tool: 'Write', file_path: '/repo/docs/product/slots.md', content: '# Slots', agentId: 'po-1' })).deny).toBeUndefined()
+
+  expect((await $.tool.call({ tool: 'Bash', command: 'printf x > "$PWD/src/a.ts"' })).deny).toContain('no approved plan')
+  expect((await $.tool.call({ tool: 'Bash', command: 'printf x > "$OUT/a.ts"' })).deny).toContain("can't place")
+  expect((await $.tool.call({ tool: 'Bash', command: 'printf x > "$OUT/a.ts"', agentId: 'po-1' })).deny).toContain("can't place")
+  expect(ran).toEqual([])
+})
+
 test('with no batch, nothing is guarded but merging, and the panel says so', async ($, on) => {
   const { ran } = engine(on)
   await $.session.start({ cwd: '/repo', surface: 'desktop', isInteractive: true })

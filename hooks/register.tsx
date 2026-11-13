@@ -9,7 +9,7 @@ import type { EngineInterface, Register } from 'claude-code'
 import type { Batch, DocFolders, Light, Meta, Verdict } from '../types'
 import { CONFIG_FILE, mergeSettings, readConfig } from './config'
 import { PartialWrite, currentLogin, currentRepo, ensureLabels, fetchPr, loadBatches, readRepoConfig, writeBatch } from './github'
-import { absoluteTarget, bashActions, editRefusal, isReviewerAgent, refusal, reviewerEditRefusal, scriptRefusal, shellWriteTargets, stateRefusal } from './guard'
+import { UNPLACED, absoluteTarget, bashActions, editRefusal, isReviewerAgent, refusal, reviewerEditRefusal, scriptRefusal, shellWriteTargets, stateRefusal } from './guard'
 import {
   appendLog,
   DEFAULT_BOT_TIMEOUT_MINUTES,
@@ -935,13 +935,17 @@ export const register: Register = (on, options) => {
     if (script) return { deny: script }
 
     const batch = await mine($)
+    // Every containment check reads the real path, links resolved, against the repository's real root:
+    // a link inside a doc folder can't carry a write into the code.
+    const root = await realPath($, await repoRoot($))
+    const real = path.startsWith('/') ? await realPath($, path) : path
     // A reviewer sub-agent edits only the plan-loop docs, and only while the batch is planning.
     if (isReviewerAgent(await agentType($, str(input['agentId']) || undefined))) {
-      const why = reviewerEditRefusal(isActive(batch) ? batch : undefined, await repoRoot($), path)
+      const why = reviewerEditRefusal(isActive(batch) ? batch : undefined, root, real)
       if (why) return { deny: why }
     }
     if (!isActive(batch)) return next(e)
-    const why = editRefusal(batch, await repoRoot($), path)
+    const why = editRefusal(batch, root, real)
 
     return why ? { deny: why } : next(e)
   }).catch(($, e, next) => (next.called ? next(e) : { deny: FAILED }))
@@ -960,24 +964,22 @@ export const register: Register = (on, options) => {
       if (why) return { deny: why }
     }
 
-    if (isReviewer) {
-      const root = await repoRoot($)
+    // A shell write to the repository is held in the same stages an Edit is, and a reviewer's always.
+    if (isReviewer || isActive(batch)) {
+      const root = await realPath($, await repoRoot($))
       const cwd = await $.session.cwd()
       for (const target of shellWriteTargets(e.command)) {
-        const path = absoluteTarget(target, cwd)
-        const why = path === undefined ? undefined : reviewerEditRefusal(isActive(batch) ? batch : undefined, root, path)
-        if (why) return { deny: `${why} (a shell write to ${target})` }
-      }
-    }
+        const placed = absoluteTarget(target, cwd)
+        // A target the guard can't place ($VAR, ~, a substitution) is judged as a write into the repository.
+        const path = placed === undefined ? `${root}/${UNPLACED}` : await realPath($, placed)
+        const why = isReviewer
+          ? reviewerEditRefusal(isActive(batch) ? batch : undefined, root, path)
+          : editRefusal(batch as Batch, root, path)
+        if (why) {
+          const where = placed === undefined ? `${target}, which Foundry can't place: name the path literally` : target
 
-    // A shell write to the repository is held in the same stages an Edit is.
-    if (isActive(batch)) {
-      const root = await repoRoot($)
-      const cwd = await $.session.cwd()
-      for (const target of shellWriteTargets(e.command)) {
-        const path = absoluteTarget(target, cwd)
-        const why = path === undefined ? undefined : editRefusal(batch, root, path)
-        if (why) return { deny: `${why} (a shell write to ${target})` }
+          return { deny: `${why} (a shell write to ${where})` }
+        }
       }
     }
 
