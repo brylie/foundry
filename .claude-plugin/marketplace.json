@@ -1,0 +1,13 @@
+{
+  "name": "foundry",
+  "description": "Foundry: gated, multi-perspective review loops from GitHub issues to shipped code.",
+  "owner": {
+    "name": "Brylie Christopher Oxley"
+  },
+  "plugins": [
+    {
+      "name": "foundry",
+      "source": "./"
+    }
+  ]
+}

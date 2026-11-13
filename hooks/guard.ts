@@ -1,0 +1,254 @@
+// What the agent's tool calls would do that a Foundry stage holds back, and
+// the state only the mod may write. A guard rail for an agent following the
+// skills: the agent still holds the person's GitHub token, so GitHub itself
+// would accept what these rules refuse.
+
+import type { Batch } from '../types'
+import { WAIT_LABEL } from './model'
+
+/** An outward step a stage holds back. */
+export type Action = 'commit' | 'claim' | 'push' | 'open-pr' | 'merge'
+
+const ACTION_WORDS: Record<Action, string> = {
+  commit: 'commit',
+  claim: 'claim issues',
+  push: 'push',
+  'open-pr': 'open a pull request',
+  merge: 'merge',
+}
+
+// Words that run the command after them, so `sudo git push` is still a push.
+const WRAPPERS = new Set(['sudo', 'env', 'command', 'exec', 'time', 'nohup', 'nice'])
+// git's global options that take a separate value (`git -C dir push`).
+const GIT_VALUED = new Set(['-C', '-c', '--git-dir', '--work-tree', '--namespace', '--exec-path'])
+// gh's global options that take a separate value (`gh -R o/r pr create`).
+const GH_VALUED = new Set(['-R', '--repo', '--hostname'])
+
+function words(segment: string): string[] {
+  return segment
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .map(word => word.replace(/^['"]|['"]$/g, ''))
+}
+
+function program(tokens: string[]): number {
+  let i = 0
+  while (i < tokens.length) {
+    const token = tokens[i] ?? ''
+    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(token) || WRAPPERS.has(token)) {
+      i += 1
+      continue
+    }
+    break
+  }
+
+  return i
+}
+
+function afterOptions(tokens: string[], start: number, valued: Set<string>): number {
+  let i = start
+  while (i < tokens.length) {
+    const token = tokens[i] ?? ''
+    if (!token.startsWith('-')) break
+    i += valued.has(token) ? 2 : 1
+  }
+
+  return i
+}
+
+function baseName(path: string): string {
+  return path.slice(path.lastIndexOf('/') + 1)
+}
+
+function segments(command: string): string[][] {
+  return command.split(/&&|\|\||[;|\n&]|\$\(|`|[()]/).map(words)
+}
+
+function segmentActions(tokens: string[]): Action[] {
+  const at = program(tokens)
+  const name = baseName(tokens[at] ?? '')
+
+  if (name === 'git') {
+    const sub = tokens[afterOptions(tokens, at + 1, GIT_VALUED)]
+    if (sub === 'commit') return ['commit']
+    if (sub === 'push') return ['push']
+
+    return []
+  }
+
+  if (name === 'gh') {
+    const i = afterOptions(tokens, at + 1, GH_VALUED)
+    const noun = tokens[i]
+    const verb = tokens[i + 1]
+    const rest = tokens.slice(i + 2)
+    if (noun === 'pr' && verb === 'create') return ['open-pr']
+    if (noun === 'pr' && verb === 'merge') return ['merge']
+    if (noun === 'issue' && verb === 'edit' && rest.some(t => t.startsWith('--add-assignee'))) return ['claim']
+    if (noun === 'api' && tokens.some(t => /\/pulls\/\d+\/merge\b/.test(t))) return ['merge']
+
+    return []
+  }
+
+  return []
+}
+
+/**
+ * The guarded actions a Bash command takes, best effort: it splits on the
+ * shell's separators and reads each command's program and subcommand. Quoted
+ * text never starts a command, so `echo "git push"` is not a push.
+ */
+export function bashActions(command: string): Action[] {
+  const found = new Set<Action>()
+  for (const tokens of segments(command)) for (const action of segmentActions(tokens)) found.add(action)
+
+  return [...found]
+}
+
+/** Which actions each stage allows, while nothing waits on the person. */
+const ALLOWED: Record<Batch['stage'], ReadonlySet<Action>> = {
+  plan: new Set(),
+  build: new Set(['commit', 'claim']),
+  ship: new Set(['claim', 'push', 'open-pr']),
+  done: new Set(['commit', 'claim', 'push', 'open-pr']),
+}
+
+const NEXT_STEP: Record<Batch['stage'], string> = {
+  plan: 'Finish the plan loop (every reviewer approves), then call mcp__foundry__signoff_request and end your turn.',
+  build: 'Pushing and the pull request come after the build sign-off: finish the build loop and call mcp__foundry__signoff_request.',
+  ship: 'To change the code, call mcp__foundry__send_back first: fixes happen in the build loop.',
+  done: '',
+}
+
+/** Why `action` is refused now, or undefined when the batch allows it. */
+export function refusal(batch: Batch, action: Action): string | undefined {
+  if (action === 'merge') return 'Foundry: the person merges, not the agent. Tell them the pull request is ready and stop.'
+  if (batch.stage === 'done') return undefined
+  if (batch.waiting !== undefined && batch.waiting.kind !== 'merge') {
+    return `Foundry: "${batch.title}" is waiting on the person (${WAIT_LABEL[batch.waiting.kind]}), so you cannot ${ACTION_WORDS[action]} now. End your turn.`
+  }
+  if (ALLOWED[batch.stage].has(action)) return undefined
+
+  return `Foundry: "${batch.title}" is in the ${batch.stage} stage, so you cannot ${ACTION_WORDS[action]} yet. ${NEXT_STEP[batch.stage]}`
+}
+
+// ---------------------------------------------------------------------------
+// File edits.
+
+function normal(path: string): string {
+  const parts: string[] = []
+  for (const part of path.split('/')) {
+    if (part === '' || part === '.') continue
+    if (part === '..') parts.pop()
+    else parts.push(part)
+  }
+
+  return `/${parts.join('/')}`
+}
+
+export function isInside(root: string, path: string): boolean {
+  const base = normal(root)
+  const file = normal(path)
+
+  return file === base || file.startsWith(`${base}/`)
+}
+
+/**
+ * Whether a stage holds back an edit of `path`: anything inside the
+ * repository, except its `.claude/` folders (plans, local settings). Paths
+ * outside it, such as a scratchpad, are never held.
+ */
+export function isGuardedPath(root: string, path: string): boolean {
+  if (!path.startsWith('/')) return true
+  if (!isInside(root, path)) return false
+
+  return !normal(path).slice(normal(root).length).split('/').includes('.claude')
+}
+
+export function editRefusal(batch: Batch, root: string, path: string): string | undefined {
+  if (batch.stage === 'done' || !isGuardedPath(root, path)) return undefined
+  if (batch.waiting !== undefined && batch.waiting.kind !== 'merge') {
+    return `Foundry: "${batch.title}" is waiting on the person (${WAIT_LABEL[batch.waiting.kind]}); files in the repository stay unchanged until they decide.`
+  }
+  if (batch.stage === 'build') return undefined
+  if (batch.stage === 'plan') {
+    return `Foundry: "${batch.title}" has no approved plan yet, so files in the repository stay unchanged. Notes outside it, or under its .claude/ folder, are fine.`
+  }
+
+  return `Foundry: "${batch.title}" is shipping. To change code, call mcp__foundry__send_back first: fixes happen in the build loop.`
+}
+
+// ---------------------------------------------------------------------------
+// The state only the mod writes: the `foundry` labels, the state comment,
+// and whether a review thread is resolved.
+
+export const STATE_MARKER = '<!-- foundry:state -->'
+
+const PROTECTED: { pattern: RegExp; what: string }[] = [
+  { pattern: /foundry:state/i, what: "Foundry's state comment" },
+  { pattern: /foundry(?::|%3a)(plan|build|ship|waiting)\b/i, what: "Foundry's stage labels" },
+  // The `foundry` label itself, however it is named: a flag, a REST path, a JSON body, `gh label`.
+  { pattern: /--(?:add-|remove-)?labels?(?:=|\s+)['"]?[^\s'"]*\bfoundry\b/i, what: "Foundry's labels" },
+  { pattern: /\/labels\/foundry\b/i, what: "Foundry's labels" },
+  { pattern: /\blabels?(?:\[\])?["']?\s*[:=]\s*\[?[^\]\n]{0,80}\bfoundry\b/i, what: "Foundry's labels" },
+  { pattern: /\blabel\s+(?:create|edit|delete|clone)\s+['"]?foundry\b/i, what: "Foundry's labels" },
+  { pattern: /\b(un)?resolveReviewThread\b|\bresolve[-_ ]?(review[-_ ]?)?threads?\b/i, what: 'review threads' },
+]
+
+/** Whether a command writes somewhere: a gh write, curl with a body or method, or inline code. */
+function isWriting(command: string): boolean {
+  for (const tokens of segments(command)) {
+    const at = program(tokens)
+    const name = baseName(tokens[at] ?? '')
+    const rest = tokens.slice(at + 1)
+    if (name === 'gh') {
+      const i = afterOptions(tokens, at + 1, GH_VALUED)
+      const noun = tokens[i]
+      const verb = tokens[i + 1] ?? ''
+      if (noun === 'label') return true
+      if ((noun === 'issue' || noun === 'pr') && ['edit', 'comment', 'close', 'reopen', 'delete'].includes(verb)) return true
+      if (noun === 'api') {
+        const isWrite = rest.some((t, j) => /^(-X|--method)$/.test(t) && !/^GET$/i.test(rest[j + 1] ?? '')) ||
+          rest.some(t => /^(-f|-F|--field|--raw-field|--input)$/.test(t) || /^--method=(?!GET)/i.test(t))
+        if (isWrite || tokens.some(t => /graphql/.test(t))) return true
+      }
+    }
+    if (name === 'curl' || name === 'wget' || name === 'http' || name === 'https' || name === 'xh') {
+      if (rest.some(t => /^(-X|--request|-d|--data.*|-F|--form|--json|-T|--upload-file|--post-data|--method)$/.test(t) || /^--(data|json|form|request)=/.test(t))) return true
+    }
+    if (/^(python[0-9.]*|node|deno|bun|ruby|perl|php|bash|sh|zsh|osascript)$/.test(name)) {
+      if (rest.some(t => /^(-c|-e|--eval|-)$/.test(t)) || rest.length === 0) return true
+    }
+  }
+
+  return false
+}
+
+function protectedThing(text: string, commentIds: number[]): string | undefined {
+  for (const { pattern, what } of PROTECTED) if (pattern.test(text)) return what
+  for (const id of commentIds) {
+    if (new RegExp(`comments/${id}\\b`).test(text)) return "Foundry's state comment"
+  }
+
+  return undefined
+}
+
+/** Why a Bash command is refused for touching what only the mod writes. */
+export function stateRefusal(command: string, commentIds: number[]): string | undefined {
+  if (!isWriting(command)) return undefined
+  const what = protectedThing(command, commentIds)
+  if (what === undefined) return undefined
+
+  return `Foundry: only the Foundry mod changes ${what}. Use the mcp__foundry__ tools; the person decides gates in the Foundry pane.`
+}
+
+const SCRIPT = /\.(sh|bash|zsh|py|js|mjs|cjs|ts|mts|rb|pl|php|ps1)$/i
+
+/** Why writing a script is refused: a script could touch the protected state where the Bash guard cannot see. */
+export function scriptRefusal(path: string, content: string, commentIds: number[], pluginRoot: string): string | undefined {
+  if (!SCRIPT.test(path) || isInside(pluginRoot, path)) return undefined
+  const what = protectedThing(content, commentIds)
+  if (what === undefined) return undefined
+
+  return `Foundry: that script would change ${what}, which only the Foundry mod writes. Use the mcp__foundry__ tools.`
+}

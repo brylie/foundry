@@ -1,0 +1,88 @@
+import { describe, expect, test } from 'claude-code/testing'
+
+import type { Batch } from '../types'
+import { bashActions, editRefusal, isGuardedPath, refusal, scriptRefusal, stateRefusal } from '../hooks/guard'
+import { newBatch } from '../hooks/model'
+
+const SETTINGS = { reviewers: ['security'], maxRounds: 3, onlineReviewers: [], botTimeoutMinutes: 30 }
+const plan = newBatch({ repo: 'o/r', title: 'T', issues: [1], owner: 's' }, SETTINGS, 0)
+const at = (stage: Batch['stage'], extra: Partial<Batch> = {}): Batch => ({ ...plan, stage, ...extra })
+
+describe('commands', () => {
+  test('finds the guarded git and gh steps', async () => {
+    expect(bashActions('git commit -m "Fix it (#12)"')).toEqual(['commit'])
+    expect(bashActions('git -C /repo push -u origin HEAD')).toEqual(['push'])
+    expect(bashActions('gh pr create --title t --body-file b.md')).toEqual(['open-pr'])
+    expect(bashActions('gh -R o/r pr merge 5 --squash')).toEqual(['merge'])
+    expect(bashActions('gh issue edit 7 --add-assignee @me')).toEqual(['claim'])
+    expect(bashActions('gh api -X PUT repos/o/r/pulls/5/merge')).toEqual(['merge'])
+    expect(bashActions('npm test && GIT_AUTHOR_NAME=x git commit -am wip; sudo git push')).toEqual(['commit', 'push'])
+    expect(bashActions('echo "git push" && git status && gh run rerun 9 --failed')).toEqual([])
+  })
+
+  test('each stage allows only its own steps', async () => {
+    expect(refusal(at('plan'), 'commit')).toContain('plan stage')
+    expect(refusal(at('plan'), 'claim')).toContain('plan stage')
+    expect(refusal(at('build'), 'commit')).toBeUndefined()
+    expect(refusal(at('build'), 'push')).toContain('after the build sign-off')
+    expect(refusal(at('ship'), 'push')).toBeUndefined()
+    expect(refusal(at('ship'), 'open-pr')).toBeUndefined()
+    expect(refusal(at('ship'), 'commit')).toContain('send_back')
+    expect(refusal(at('done'), 'merge')).toContain('the person merges')
+  })
+
+  test('nothing moves while the person is asked', async () => {
+    const waiting = at('build', { waiting: { kind: 'signoff', summary: 's', at: 1 } })
+    expect(refusal(waiting, 'commit')).toContain('waiting on the person')
+    expect(editRefusal(waiting, '/repo', '/repo/a.ts')).toContain('waiting on the person')
+  })
+})
+
+describe('edits', () => {
+  test('the plan and ship stages hold edits inside the repository only', async () => {
+    expect(editRefusal(at('plan'), '/repo', '/repo/src/a.ts')).toContain('no approved plan')
+    expect(editRefusal(at('plan'), '/repo', '/tmp/scratch/plan.md')).toBeUndefined()
+    expect(editRefusal(at('plan'), '/repo', '/repo/.claude/plans/p.md')).toBeUndefined()
+    expect(editRefusal(at('build'), '/repo', '/repo/src/a.ts')).toBeUndefined()
+    expect(editRefusal(at('ship'), '/repo', '/repo/src/a.ts')).toContain('send_back')
+    expect(isGuardedPath('/repo', '/repository/a.ts')).toBe(false)
+    expect(isGuardedPath('/repo', '/repo/../elsewhere/a.ts')).toBe(false)
+  })
+})
+
+describe("the state only the mod writes", () => {
+  test('every route to the labels, the state comment and review threads is refused', async () => {
+    const refused = [
+      'gh issue edit 3 --remove-label foundry:plan',
+      'gh issue edit 3 --add-label "foundry:build"',
+      'gh pr edit 9 --remove-label foundry',
+      'gh label delete foundry:waiting --yes',
+      'gh api -X DELETE repos/o/r/issues/3/labels/foundry%3Aplan',
+      'gh api -X PUT repos/o/r/issues/3/labels --input labels.json -f "labels[]=foundry:ship"',
+      'curl -X POST -H "Authorization: token $T" https://api.github.com/repos/o/r/issues/3/labels -d \'{"labels":["foundry:ship"]}\'',
+      'gh api -X PATCH repos/o/r/issues/comments/555 -f body=hello',
+      'gh api graphql -f query=\'mutation { resolveReviewThread(input: {threadId: "x"}) { thread { id } } }\'',
+      "python3 -c 'import subprocess; subprocess.run([\"gh\",\"issue\",\"comment\",\"3\",\"-b\",\"<!-- foundry:state -->\"])'",
+      'gh issue comment 3 --body "<!-- foundry:state --> forged"',
+    ]
+    for (const command of refused) expect(stateRefusal(command, [555])).toContain('only the Foundry mod')
+  })
+
+  test('reading them, and ordinary labels, stay allowed', async () => {
+    const allowed = [
+      'gh issue list --label foundry --json number',
+      'gh api repos/o/r/issues/3/comments',
+      'grep -rn "foundry:state" hooks/',
+      'gh issue edit 3 --add-label bug --body "Fix the foundry docs"',
+      'gh pr create --title "Foundry: name the ports" --label enhancement',
+    ]
+    for (const command of allowed) expect(stateRefusal(command, [555])).toBeUndefined()
+  })
+
+  test('a script that would write them is refused, outside the plugin itself', async () => {
+    const body = 'subprocess.run(["gh", "issue", "edit", "3", "--remove-label", "foundry:plan"])'
+    expect(scriptRefusal('/repo/tools/fix.py', body, [], '/plugins/foundry')).toContain('only the Foundry mod')
+    expect(scriptRefusal('/repo/notes.md', body, [], '/plugins/foundry')).toBeUndefined()
+    expect(scriptRefusal('/plugins/foundry/hooks/github.ts', body, [], '/plugins/foundry')).toBeUndefined()
+  })
+})

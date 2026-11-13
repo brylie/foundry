@@ -1,0 +1,43 @@
+{
+  "name": "foundry",
+  "version": "0.1.0",
+  "description": "Guides agents from GitHub issues to shipped code through gated, multi-perspective review loops.",
+  "author": {
+    "name": "Brylie Christopher Oxley"
+  },
+  "license": "Apache-2.0",
+  "keywords": [
+    "github",
+    "issues",
+    "code-review",
+    "workflow",
+    "gates"
+  ],
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "reviewers": {
+      "type": "string",
+      "title": "Reviewers",
+      "description": "Comma-separated review perspectives. Every one must approve before a gate goes to you.",
+      "default": "product-owner,usability,accessibility,architecture,security"
+    },
+    "maxRounds": {
+      "type": "number",
+      "title": "Round limit per stage",
+      "description": "Review rounds allowed in a stage before it escalates to you. CI reruns for flaky tests don't count.",
+      "default": 3
+    },
+    "onlineReviewers": {
+      "type": "string",
+      "title": "Online reviewers",
+      "description": "Comma-separated GitHub logins of the automated reviewers that must review a pull request's head commit before it ships. Codecov belongs in CI, as its status check.",
+      "default": "coderabbitai[bot],gitar-bot[bot]"
+    },
+    "botTimeoutMinutes": {
+      "type": "number",
+      "title": "Online reviewer timeout (minutes)",
+      "description": "How long to wait for an online reviewer to review a new commit before it escalates to you.",
+      "default": 30
+    }
+  }
+}

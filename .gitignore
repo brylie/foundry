@@ -147,3 +147,10 @@ vite.config.ts.timestamp-*
 
 # Turbo Repo
 .turbo
+
+# Python
+__pycache__/
+*.pyc
+
+# Written by Claude Code when it loads the mod
+.claude-plugin/types/
