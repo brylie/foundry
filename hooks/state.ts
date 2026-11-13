@@ -176,6 +176,8 @@ export function isBatch(v: unknown): v is Batch {
     isInt(v['maxRounds']) &&
     isListOf(v['onlineReviewers'], isString) &&
     isListOf(v['maintainers'], isString) &&
+    isObject(v['docs']) &&
+    ['requirements', 'specifications', 'decisions', 'user'].every(kind => isListOf((v['docs'] as Shape)[kind], isString)) &&
     isNumber(v['botTimeoutMinutes']) &&
     isString(v['owner']) &&
     isOptional(v['commentId'], isInt) &&

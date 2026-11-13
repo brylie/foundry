@@ -43,7 +43,7 @@ Go through the change once for each of these. Keep any candidate with a failure 
 - **Altitude:** does it fix the cause, or add a special case to shared code?
 - **Project rules:** quote the exact rule and the exact line that breaks it.
 
-To review from several perspectives at once, spawn the Foundry reviewers in parallel with the stage `build` (`foundry:product-owner`, `foundry:usability`, `foundry:accessibility`, `foundry:architecture`, `foundry:security`), and merge their findings into one review. Rank correctness above cleanup. Keep the list to what is worth a change, at most 10 findings unless the user asks for more. Where you can, check a doubtful finding with a small calculation or simulation, and say that you did.
+To review from several perspectives at once, spawn the Foundry reviewers in parallel with the stage `build` (`foundry:product-owner`, `foundry:usability`, `foundry:accessibility`, `foundry:architecture`, `foundry:security`, `foundry:documentation`), and merge their findings into one review. Rank correctness above cleanup. Keep the list to what is worth a change, at most 10 findings unless the user asks for more. Where you can, check a doubtful finding with a small calculation or simulation, and say that you did.
 
 ## 3. Write the review
 

@@ -20,7 +20,8 @@ const PANE = {
 } as const
 
 const SHOWN = { isFullscreen: true, columns: 120 }
-const FIVE = ['product-owner', 'usability', 'accessibility', 'architecture', 'security']
+/** The default reviewers: the spec's five, and documentation. */
+const REVIEWERS = ['product-owner', 'usability', 'accessibility', 'architecture', 'security', 'documentation']
 const HEAD = 'feedbeef00'
 /** The account the mod's `gh` is signed in as. */
 const WRITER = 'maintainer'
@@ -179,7 +180,7 @@ function engine(on: On) {
 }
 
 async function approveAll($: Engine) {
-  for (const perspective of FIVE) {
+  for (const perspective of REVIEWERS) {
     const r = await $.tool.call({ tool: 'mcp__foundry__review_record', perspective, reviewer: `foundry:${perspective}`, verdict: 'ready', summary: 'fine' })
     expect(r.deny).toBeUndefined()
   }
@@ -536,6 +537,37 @@ test('a sync says when its retry fails again or GitHub cannot be read, and only 
   const landed = await sync()
   expect(landed.text).toBe('Synced the batches from GitHub.')
   expect(hub.state(12)?.stage).toBe('build')
+})
+
+test('docs come first: the plan loop writes requirements and specs, and a reviewer sub-agent never edits code', async ($, on) => {
+  const { ran } = engine(on)
+  // Two sub-agents run in this session: a Foundry reviewer and the oversight agent's general helper.
+  on('agent.list', () => ({
+    value: [
+      { id: 'po-1', type: 'foundry:product-owner', description: 'requirements', status: 'running' },
+      { id: 'gp-1', type: 'general-purpose', description: 'helper', status: 'running' },
+    ] as never,
+  }))
+  await $.session.start({ cwd: '/repo', surface: 'desktop', isInteractive: true })
+  const started = await $.tool.call({ tool: 'mcp__foundry__batch_start', title: 'T', issues: [12] })
+  // No doc folders exist in the checkout here, so the usual ones are where the authors start them.
+  expect(String(started.result)).toContain('Docs: requirements docs/product; specifications docs/design; decisions docs/adr')
+
+  const prd = { tool: 'Write', file_path: '/repo/docs/product/slots.md', content: '# Slots' } as const
+  expect((await $.tool.call({ ...prd, agentId: 'po-1' })).deny).toBeUndefined()
+  expect((await $.tool.call({ tool: 'Write', file_path: '/repo/src/slot.rs', content: 'x', agentId: 'po-1' })).deny).toContain("doesn't edit")
+  expect((await $.tool.call({ tool: 'Bash', command: 'git commit -am docs', agentId: 'po-1' })).deny).toContain("doesn't commit")
+  expect((await $.tool.call({ tool: 'Bash', command: 'printf x > src/slot.rs', agentId: 'po-1' })).deny).toContain("doesn't edit")
+  // The oversight agent and its helpers are held by the stage, as before.
+  expect((await $.tool.call({ tool: 'Write', file_path: '/repo/src/slot.rs', content: 'x', agentId: 'gp-1' })).deny).toContain('no approved plan')
+  expect(ran).toEqual([])
+
+  // After the plan sign-off the reviewer goes back to reading only.
+  await approveAll($)
+  await $.tool.call({ tool: 'mcp__foundry__signoff_request', summary: 'plan and docs' })
+  await $.command.run({ command: 'foundry', args: 'approve', origin: { kind: 'composer' }, presentation: SHOWN })
+  expect((await $.tool.call({ ...prd, agentId: 'po-1' })).deny).toContain("doesn't edit")
+  expect((await $.tool.call({ tool: 'Write', file_path: '/repo/src/slot.rs', content: 'x' })).deny).toBeUndefined()
 })
 
 test('with no batch, nothing is guarded but merging, and the panel says so', async ($, on) => {

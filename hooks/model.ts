@@ -1,9 +1,26 @@
 // The stages of a Foundry batch and every move between them, kept free of `$`
 // so tests call them directly. Each move takes a batch and returns a new one.
 
-import type { Batch, LoopStage, Review, Stage, Verdict, Waiting, WaitKind } from '../types'
+import type { Batch, DocFolders, LoopStage, Review, Stage, Verdict, Waiting, WaitKind } from '../types'
 
-export const DEFAULT_REVIEWERS = 'product-owner,usability,accessibility,architecture,security'
+export const DEFAULT_REVIEWERS = 'product-owner,usability,accessibility,architecture,security,documentation'
+
+/**
+ * Where each kind of doc usually lives, in the order a batch looks for it.
+ * The first that exists wins; with none, the first is where it will be made.
+ * For user docs every one that exists counts.
+ */
+export const DOC_CANDIDATES: Record<keyof DocFolders, string[]> = {
+  requirements: ['docs/product', 'docs/requirements', 'docs/prd'],
+  specifications: ['docs/design', 'docs/specs', 'docs/specifications', 'docs/spec'],
+  decisions: ['docs/adr', 'docs/decisions'],
+  user: ['README.md', 'CHANGELOG.md', 'docs/guide', 'docs/learn', 'docs/modules', 'docs/user', 'docs/manual', 'docs/reference'],
+}
+
+/** The doc kinds written in the plan loop, before any code: the rest change with the code. */
+export const PLAN_DOCS: readonly (keyof DocFolders)[] = ['requirements', 'specifications', 'decisions']
+
+export const NO_DOCS: DocFolders = { requirements: [], specifications: [], decisions: [], user: [] }
 export const DEFAULT_MAX_ROUNDS = 3
 export const DEFAULT_ONLINE_REVIEWERS = 'coderabbitai[bot]'
 export const DEFAULT_BOT_TIMEOUT_MINUTES = 30
@@ -79,6 +96,7 @@ export type Settings = {
   onlineReviewers: string[]
   maintainers: string[]
   botTimeoutMinutes: number
+  docs: DocFolders
 }
 
 /** Everyone whose feedback the gate counts and the agent may act on: the online reviewers and the maintainers. */

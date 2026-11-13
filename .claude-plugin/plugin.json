@@ -19,7 +19,7 @@
       "type": "string",
       "title": "Reviewers",
       "description": "Comma-separated review perspectives. Every one must approve before a gate goes to you.",
-      "default": "product-owner,usability,accessibility,architecture,security"
+      "default": "product-owner,usability,accessibility,architecture,security,documentation"
     },
     "maxRounds": {
       "type": "number",

@@ -4,7 +4,7 @@
 // would accept what these rules refuse.
 
 import type { Batch } from '../types'
-import { WAIT_LABEL } from './model'
+import { PLAN_DOCS, WAIT_LABEL } from './model'
 
 /** An outward step a stage holds back. */
 export type Action = 'commit' | 'claim' | 'push' | 'open-pr' | 'merge'
@@ -165,6 +165,16 @@ export function isGuardedPath(root: string, path: string): boolean {
   return !normal(path).slice(normal(root).length).split('/').includes('.claude')
 }
 
+/** The doc folders the plan loop writes: requirements, specifications and decisions, as absolute paths. */
+export function planDocFolders(batch: Batch, root: string): string[] {
+  return PLAN_DOCS.flatMap(kind => batch.docs[kind]).map(folder => `${normal(root)}/${folder}`)
+}
+
+/** Whether `path` is one of the docs the plan loop writes, before any code. */
+export function isPlanDoc(batch: Batch, root: string, path: string): boolean {
+  return path.startsWith('/') && planDocFolders(batch, root).some(folder => isInside(folder, path))
+}
+
 export function editRefusal(batch: Batch, root: string, path: string): string | undefined {
   if (batch.stage === 'done' || !isGuardedPath(root, path)) return undefined
   if (batch.waiting !== undefined && batch.waiting.kind !== 'merge') {
@@ -172,10 +182,31 @@ export function editRefusal(batch: Batch, root: string, path: string): string | 
   }
   if (batch.stage === 'build') return undefined
   if (batch.stage === 'plan') {
-    return `Foundry: "${batch.title}" has no approved plan yet, so files in the repository stay unchanged. Notes outside it, or under its .claude/ folder, are fine.`
+    // Docs first: requirements, specifications and decisions are written and reviewed with the plan.
+    if (isPlanDoc(batch, root, path)) return undefined
+    const folders = PLAN_DOCS.flatMap(kind => batch.docs[kind]).join(', ') || 'none set'
+
+    return `Foundry: "${batch.title}" has no approved plan yet, so code stays unchanged. Before the plan sign-off only the requirements, specification and decision docs (${folders}) are written, with notes outside the repository or under its .claude/ folder.`
   }
 
   return `Foundry: "${batch.title}" is shipping. To change code, call mcp__foundry__send_back first: fixes happen in the build loop.`
+}
+
+/** Foundry's own agent types that review: every `foundry:` agent but the oversight agent. */
+export function isReviewerAgent(type: string | undefined): boolean {
+  return type !== undefined && type.startsWith('foundry:') && type !== 'foundry:oversight'
+}
+
+/**
+ * Why a reviewer sub-agent may not make this edit. Reviewers judge, they
+ * do not build: the product owner and architecture co-author the plan-loop
+ * docs while the batch is planning, and no reviewer edits anything else.
+ */
+export function reviewerEditRefusal(batch: Batch | undefined, root: string, path: string): string | undefined {
+  if (!path.startsWith('/') || !isInside(root, path)) return undefined
+  if (batch !== undefined && batch.stage === 'plan' && batch.waiting === undefined && isPlanDoc(batch, root, path)) return undefined
+
+  return "Foundry: a reviewer agent doesn't edit the repository. In the plan loop the product owner and architecture may edit only the requirements, specification and decision docs; everything else is the oversight agent's to change."
 }
 
 // ---------------------------------------------------------------------------

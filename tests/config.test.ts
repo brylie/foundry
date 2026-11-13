@@ -8,6 +8,7 @@ const PLUGIN = {
   onlineReviewers: ['coderabbitai'],
   maintainers: [],
   botTimeoutMinutes: 30,
+  docs: { requirements: ['docs/product'], specifications: [], decisions: [], user: [] },
 }
 
 describe('foundry.yaml', () => {
@@ -40,6 +41,13 @@ bot_timeout_minutes: 45
     expect(merged.maintainers).toEqual(['brylie'])
     expect(merged.reviewers).toEqual(PLUGIN.reviewers)
     expect(merged.maxRounds).toBe(3)
+  })
+
+  test('doc folders are set per kind, inside the repository only', async () => {
+    const { config, problems } = readConfig('requirements: [docs/prd/]\nspecifications:\n  - ./docs/specs\n  - ../elsewhere\ndecisions: [docs/adr]\n')
+    expect(problems).toEqual(['"specifications": ../elsewhere is not a path inside the repository'])
+    const merged = mergeSettings(PLUGIN, config)
+    expect(merged.docs).toEqual({ requirements: ['docs/prd'], specifications: ['docs/specs'], decisions: ['docs/adr'], user: [] })
   })
 
   test('mistakes are reported, not guessed, and never weaken the rules', async () => {
