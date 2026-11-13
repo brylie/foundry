@@ -30,8 +30,14 @@
     "onlineReviewers": {
       "type": "string",
       "title": "Online reviewers",
-      "description": "Comma-separated GitHub logins of the automated reviewers that must review a pull request's head commit before it ships. Codecov belongs in CI, as its status check.",
-      "default": "coderabbitai[bot],gitar-bot[bot]"
+      "description": "Comma-separated GitHub logins of the automated reviewers that must review a pull request's head commit before it ships. They are on the allowlist: only their comments and the maintainers' reach the agent. A repository's foundry.yaml overrides this. Codecov belongs in CI, as its status check.",
+      "default": "coderabbitai[bot]"
+    },
+    "maintainers": {
+      "type": "string",
+      "title": "Maintainers",
+      "description": "Comma-separated GitHub logins whose pull request comments count as reviewer feedback (never as sign-off). Empty means the account gh is signed in as. A repository's foundry.yaml overrides this.",
+      "default": ""
     },
     "botTimeoutMinutes": {
       "type": "number",

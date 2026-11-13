@@ -38,7 +38,7 @@ An issue is **triaged** when the board has its Priority and Size set and its Sta
 The mod reads the PR every minute and judges it only on facts GitHub records:
 
 - **CI:** every check passes. Codecov's status checks (`codecov/patch`) count as CI. No checks yet, right after a push, counts as pending, not green.
-- **Online reviewers:** each one in the `onlineReviewers` setting must review the **head commit**. A review of an older commit doesn't count. Neither does a busy or rate-limited comment (coderabbit's "Review limit reached", gitar's "Gitar is working").
+- **Online reviewers:** each one on the allowlist (`online_reviewers` in `foundry.yaml`, else the `onlineReviewers` setting) must review the **head commit**. Reviews and threads from anyone off the allowlist are ignored by the gate and listed for you. A review of an older commit doesn't count. Neither does a busy or rate-limited comment (coderabbit's "Review limit reached", gitar's "Gitar is working").
 - **Nothing open:** no review requests changes, and no review thread is unresolved. The agent replies in threads and resolves them once fixed. An online reviewer's resolved thread still blocks until that reviewer has reviewed a commit newer than the one it was raised on, so resolving without a fix clears nothing.
 - **Comment-only reviewers:** a bot that leaves only a comment on the head commit, like gitar-bot's summary, waits on you to read it and dismiss it in the panel.
 - **Timeouts:** a reviewer silent for `botTimeoutMinutes` (30) after a push escalates to you. You keep waiting or dismiss it for that commit.
@@ -126,10 +126,29 @@ In the desktop app: click + next to the prompt box, then Plugins, then Add marke
 |---|---|---|
 | `reviewers` | `product-owner,usability,accessibility,architecture,security` | Comma-separated review perspectives. Every one must approve before a sign-off goes to you. An empty list means the defaults. |
 | `maxRounds` | `3` | Review rounds per stage before it escalates to you. CI reruns for flaky tests don't count. |
-| `onlineReviewers` | `coderabbitai[bot],gitar-bot[bot]` | The automated reviewers that must review a PR's head commit. Codecov belongs in CI, as its status check. |
+| `onlineReviewers` | `coderabbitai[bot]` | The automated reviewers that must review a PR's head commit. Codecov belongs in CI, as its status check. |
+| `maintainers` | *(the signed-in account)* | People whose PR comments count as reviewer feedback, never as sign-off. |
 | `botTimeoutMinutes` | `30` | How long to wait for an online reviewer after a push before it escalates to you. |
 
 A batch takes the settings in force when it starts.
+
+### Per repository: `foundry.yaml`
+
+A repository can set its own values in a `foundry.yaml` at its root. Each field it sets wins over the plugin's settings; each it leaves out falls back to them. Foundry reads it from the **default branch only**, never the checkout, so a pull request can't change the rules it's judged by: an edit takes effect once it's merged.
+
+```yaml
+online_reviewers:        # must review the head commit; part of the allowlist
+  - coderabbitai[bot]
+  - gitar-bot[bot]
+maintainers: [brylie]    # their comments count as feedback, never sign-off
+reviewers: [product-owner, usability, accessibility, architecture, security]
+max_rounds: 3
+bot_timeout_minutes: 30
+```
+
+The file is a small YAML subset: top-level `key: value` lines, `[a, b]` or `- item` lists, and `#` comments. Foundry reports an unknown key or a bad value when a batch starts, rather than guessing what was meant.
+
+**The allowlist** is the online reviewers plus the maintainers. Only their reviews, threads and comments count toward the ship gate, and only theirs reach the agent. Anyone else's comment, however it's worded, neither blocks the gate nor reaches the agent as an instruction. The card lists them as "outside the allowlist" for you to read. This repository's own [`foundry.yaml`](foundry.yaml) is an example.
 
 ## Limits
 

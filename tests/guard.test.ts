@@ -13,7 +13,7 @@ import {
 } from '../hooks/guard'
 import { newBatch } from '../hooks/model'
 
-const SETTINGS = { reviewers: ['security'], maxRounds: 3, onlineReviewers: [], botTimeoutMinutes: 30 }
+const SETTINGS = { reviewers: ['security'], maxRounds: 3, onlineReviewers: [], maintainers: [], botTimeoutMinutes: 30 }
 const plan = newBatch({ repo: 'o/r', title: 'T', issues: [1], owner: 's' }, SETTINGS, 0)
 const at = (stage: Batch['stage'], extra: Partial<Batch> = {}): Batch => ({ ...plan, stage, ...extra })
 

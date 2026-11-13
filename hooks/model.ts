@@ -5,7 +5,7 @@ import type { Batch, LoopStage, Review, Stage, Verdict, Waiting, WaitKind } from
 
 export const DEFAULT_REVIEWERS = 'product-owner,usability,accessibility,architecture,security'
 export const DEFAULT_MAX_ROUNDS = 3
-export const DEFAULT_ONLINE_REVIEWERS = 'coderabbitai[bot],gitar-bot[bot]'
+export const DEFAULT_ONLINE_REVIEWERS = 'coderabbitai[bot]'
 export const DEFAULT_BOT_TIMEOUT_MINUTES = 30
 
 export const VERDICTS: readonly Verdict[] = ['ready', 'revise', 'rethink']
@@ -77,7 +77,13 @@ export type Settings = {
   reviewers: string[]
   maxRounds: number
   onlineReviewers: string[]
+  maintainers: string[]
   botTimeoutMinutes: number
+}
+
+/** Everyone whose feedback the gate counts and the agent may act on: the online reviewers and the maintainers. */
+export function allowlist(batch: Pick<Batch, 'onlineReviewers' | 'maintainers'>): string[] {
+  return [...new Set([...batch.onlineReviewers, ...batch.maintainers])]
 }
 
 export function newBatch(
@@ -454,6 +460,7 @@ export function prOpened(batch: Batch, pr: number, url: string, now: number): Mo
     isMerged: false,
     checkedAt: 0,
     dismissed: [],
+    outsiders: [],
   }
 
   return { batch: log({ ...batch, ship }, now, `Pull request #${pr} opened.`) }

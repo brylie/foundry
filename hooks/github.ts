@@ -5,6 +5,7 @@
 import type { EngineInterface } from 'claude-code'
 
 import type { Batch } from '../types'
+import { CONFIG_FILE } from './config'
 import type { PrData } from './ship'
 import { LABEL_SPECS, labelsFor, parseState, renderState } from './state'
 
@@ -27,6 +28,23 @@ export async function currentRepo($: EngineInterface): Promise<string | undefine
     return name || undefined
   } catch {
     return undefined
+  }
+}
+
+/**
+ * The repository's foundry.yaml as its default branch holds it, never the
+ * checkout's: a branch cannot change the allowlist or the rules it is judged
+ * by. Undefined text means the default branch has no such file.
+ */
+export async function readRepoConfig($: EngineInterface, repo: string): Promise<{ branch: string; text?: string }> {
+  const branch = (await gh($, ['repo', 'view', repo, '--json', 'defaultBranchRef', '--jq', '.defaultBranchRef.name'])).trim() || 'main'
+  try {
+    const text = await gh($, ['api', '-H', 'Accept: application/vnd.github.raw+json', `repos/${repo}/contents/${CONFIG_FILE}?ref=${encodeURIComponent(branch)}`])
+
+    return { branch, text }
+  } catch (error) {
+    if (/HTTP 404|Not Found/i.test(error instanceof Error ? error.message : String(error))) return { branch }
+    throw error
   }
 }
 

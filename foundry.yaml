@@ -1,0 +1,19 @@
+# Foundry's settings for this repository. Foundry reads this file from the
+# default branch only, so a pull request cannot change the rules it is
+# judged by: a change here takes effect once it is merged.
+
+# The automated reviewers that must review a pull request's head commit.
+# With the maintainers below, they are the allowlist: only their comments
+# count, and only their comments reach the agent.
+online_reviewers:
+  - coderabbitai[bot]
+
+# People whose pull request comments count as reviewer feedback (never as
+# sign-off; sign-off happens only in the Foundry panel or /foundry).
+maintainers:
+  - brylie
+
+# Left out, these come from the plugin's settings:
+# reviewers: [product-owner, usability, accessibility, architecture, security]
+# max_rounds: 3
+# bot_timeout_minutes: 30

@@ -143,7 +143,8 @@ function isShip(v: unknown): boolean {
     typeof v['isMerged'] === 'boolean' &&
     isNumber(v['checkedAt']) &&
     isListOf(v['dismissed'], isString) &&
-    isOptional(v['notice'], isString)
+    isOptional(v['notice'], isString) &&
+    isListOf(v['outsiders'], isString)
   )
 }
 
@@ -174,6 +175,7 @@ export function isBatch(v: unknown): v is Batch {
     (v['reviewers'] as unknown[]).length > 0 &&
     isInt(v['maxRounds']) &&
     isListOf(v['onlineReviewers'], isString) &&
+    isListOf(v['maintainers'], isString) &&
     isNumber(v['botTimeoutMinutes']) &&
     isString(v['owner']) &&
     isOptional(v['commentId'], isInt) &&

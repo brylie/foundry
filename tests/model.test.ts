@@ -19,7 +19,13 @@ import {
 import { isBatch, labelsFor, parseState, renderState } from '../hooks/state'
 
 const FIVE = parseReviewers('product-owner,usability,accessibility,architecture,security')
-const SETTINGS = { reviewers: FIVE, maxRounds: 3, onlineReviewers: parseLogins('coderabbitai[bot],gitar-bot[bot]'), botTimeoutMinutes: 30 }
+const SETTINGS = {
+  reviewers: FIVE,
+  maxRounds: 3,
+  onlineReviewers: parseLogins('coderabbitai[bot],gitar-bot[bot]'),
+  maintainers: ['brylie'],
+  botTimeoutMinutes: 30,
+}
 
 function start(): Batch {
   return newBatch({ repo: 'o/r', title: 'Name the ports', issues: [12, 14], owner: 's1' }, SETTINGS, 0)

@@ -42,24 +42,32 @@ function github() {
   }
   const calls: string[] = []
   const failing: RegExp[] = []
+  /** foundry.yaml on the default branch; undefined means the file is not there. */
+  let config: string | undefined
 
   /** `gh` as the mod runs it: a call matching a `failOnce` pattern fails, once. */
-  function run(argv: readonly string[], stdin?: string): { stdout: string; exitCode: number } {
+  function run(argv: readonly string[], stdin?: string): { stdout: string; stderr: string; exitCode: number } {
     const line = argv.slice(1).join(' ')
     const fail = failing.findIndex(p => p.test(line))
     if (fail >= 0) {
       failing.splice(fail, 1)
 
-      return { stdout: '', exitCode: 1 }
+      return { stdout: '', stderr: 'gh: Server Error (HTTP 502)', exitCode: 1 }
+    }
+    if (/contents\/foundry\.yaml/.test(line)) {
+      calls.push(line)
+
+      return config === undefined ? { stdout: '', stderr: 'gh: Not Found (HTTP 404)', exitCode: 1 } : { stdout: config, stderr: '', exitCode: 0 }
     }
 
-    return { stdout: answer(argv, stdin), exitCode: 0 }
+    return { stdout: answer(argv, stdin), stderr: '', exitCode: 0 }
   }
 
   function answer(argv: readonly string[], stdin?: string): string {
     const args = argv.slice(1)
     const line = args.join(' ')
     calls.push(line)
+    if (line.startsWith('repo view') && line.includes('defaultBranchRef')) return 'main\n'
     if (line.startsWith('repo view')) return 'o/r\n'
     if (line.startsWith('label create')) return ''
     if (line.startsWith('issue list')) return JSON.stringify([...labels].filter(([, l]) => l.includes('foundry')).map(([number]) => ({ number })))
@@ -114,6 +122,7 @@ function github() {
     comments,
     post,
     failOnce: (pattern: RegExp) => failing.push(pattern),
+    setConfig: (text: string | undefined) => (config = text),
     setPr: (next: Partial<PrData>) => (pr = { ...pr, ...next }),
     state: (issue: number) => {
       const body = (comments.get(issue) ?? []).map(c => c.body).find(b => b.includes('foundry:state'))
@@ -139,9 +148,9 @@ function engine(on: On) {
   on('session.id', () => ({ value: 'session-1' }))
   on('session.repo', () => ({ value: { root: '/repo', name: 'r', remote: 'git@github.com:o/r.git', internal: false } }))
   on('process.run', (_, e) => {
-    const { stdout, exitCode } = hub.run(e.argv, e.init?.stdin)
+    const { stdout, stderr, exitCode } = hub.run(e.argv, e.init?.stdin)
 
-    return { value: { exitCode, stdout, stderr: exitCode === 0 ? '' : 'HTTP 502', isStdoutTruncated: false, isStderrTruncated: false } }
+    return { value: { exitCode, stdout, stderr, isStdoutTruncated: false, isStderrTruncated: false } }
   })
   on('prompt.submit', (_, e) => {
     prompts.push(e.text)
@@ -173,10 +182,15 @@ async function press($: Engine, key: string) {
 
 test('a batch moves through every stage, its state in GitHub, gated by the person', async ($, on) => {
   const { hub, prompts, ran } = engine(on)
+  hub.setConfig('online_reviewers:\n  - coderabbitai[bot]\n  - gitar-bot[bot]\nmaintainers: [maintainer]\n')
   await $.session.start({ cwd: '/repo', surface: 'desktop', isInteractive: true })
 
   const started = await $.tool.call({ tool: 'mcp__foundry__batch_start', title: 'Name the ports', issues: [12, 14] })
   expect(started.deny).toBeUndefined()
+  // The allowlist comes from foundry.yaml on the default branch, never the checkout.
+  expect(String(started.result)).toContain('Settings from foundry.yaml on main.')
+  expect(hub.calls.some(c => c.includes('contents/foundry.yaml?ref=main'))).toBe(true)
+  expect(hub.state(12)?.onlineReviewers).toEqual(['coderabbitai', 'gitar-bot'])
   expect(hub.state(12)?.stage).toBe('plan')
   expect(hub.labels.get(12)).toEqual(['foundry', 'foundry:plan'])
   expect(hub.labels.get(14)).toEqual(['foundry', 'foundry:plan'])
@@ -364,6 +378,17 @@ test('a shell write to the repository is held in the plan stage; elsewhere it is
   expect((await $.tool.call({ tool: 'Bash', command: 'npm test > /tmp/out.txt 2>&1' })).deny).toBeUndefined()
   expect((await $.tool.call({ tool: 'Bash', command: 'echo note >> /repo/.claude/plan.md' })).deny).toBeUndefined()
   expect(ran).toEqual(['npm test > /tmp/out.txt 2>&1', 'echo note >> /repo/.claude/plan.md'])
+})
+
+test('with no foundry.yaml, the plugin settings apply and the signed-in account is the maintainer', async ($, on) => {
+  const { hub } = engine(on)
+  await $.session.start({ cwd: '/repo', surface: 'desktop', isInteractive: true })
+  const started = await $.tool.call({ tool: 'mcp__foundry__batch_start', title: 'T', issues: [12] })
+
+  expect(String(started.result)).toContain("No foundry.yaml on main: the plugin's settings apply.")
+  expect(hub.state(12)?.onlineReviewers).toEqual(['coderabbitai'])
+  expect(hub.state(12)?.maintainers).toEqual([WRITER])
+  expect(String(started.result)).toContain(`Allowlist: act only on PR comments from coderabbitai, ${WRITER}.`)
 })
 
 test('with no batch, nothing is guarded but merging, and the panel says so', async ($, on) => {

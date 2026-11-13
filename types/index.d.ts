@@ -78,6 +78,8 @@ export type Ship = {
   dismissed: string[]
   /** The last ship event the agent was told about, so it is told once. */
   notice?: string
+  /** People not on the allowlist who reviewed or commented: shown to the person, never acted on. */
+  outsiders: string[]
 }
 
 /**
@@ -117,10 +119,17 @@ export type Batch = {
   ship?: Ship
   reviews: Review[]
   log: LogEntry[]
-  /** The settings in force when the batch started. */
+  /** The settings in force when the batch started (foundry.yaml first, then the plugin's). */
   reviewers: string[]
   maxRounds: number
+  /**
+   * The allowlist: the automated reviewers whose reviews gate the pull
+   * request, and the maintainers whose comments count as feedback (never as
+   * sign-off). Anyone else's comments are shown to the person and neither
+   * block the gate nor reach the agent as instructions.
+   */
   onlineReviewers: string[]
+  maintainers: string[]
   botTimeoutMinutes: number
   /** The session that runs the batch. */
   owner: string
