@@ -1,6 +1,6 @@
 {
   "name": "foundry",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Guides agents from GitHub issues to shipped code through gated, multi-perspective review loops.",
   "author": {
     "name": "Brylie Christopher Oxley"

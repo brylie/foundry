@@ -18,7 +18,7 @@ maintainers:
 requirements: [docs/requirements]
 specifications: [docs/specification.md]
 decisions: [docs/decisions]
-user_docs: [README.md]
+user_docs: [README.md, CHANGELOG.md]
 
 # Left out, these come from the plugin's settings:
 # reviewers: [product-owner, usability, accessibility, architecture, security, documentation]
