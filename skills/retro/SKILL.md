@@ -39,7 +39,7 @@ Classify each candidate as one of: **follow-up**, **bug**, **manual check** (onl
 
 A good retro files fewer, better issues. Drop or redirect candidates that:
 
-- **are already tracked.** Search open issues (`gh issue list --state open --search "<keywords>"`, and `scripts/repo_context.py` lists all open titles). If an existing issue covers it, add a comment there instead of filing a duplicate. Mention it in your report.
+- **are already tracked.** Search open issues (`gh issue list --state open --search "<keywords>"`; `scripts/repo_context.py` also lists open titles, up to 500, and warns when it stops there). If an existing issue covers it, add a comment there instead of filing a duplicate. Mention it in your report.
 - **are trivial.** Fix them now, or leave them out.
 - **only the user can do**, such as changing an account or app setting. Mention them in the report; an issue nobody can act on is noise.
 - **are manual checks.** Never file one as its own issue. A check that code or a test could do is a test gap, so file that instead. What only a person can do goes on the milestone's Manual QA issue (step 7). *Why:* one issue per check makes the backlog grow fast and hides the work that code can finish.
@@ -105,16 +105,20 @@ Write for someone who was not in the session:
 
 Each milestone has one issue, titled exactly `Manual QA: <milestone short name>`, such as `Manual QA: M2`. It holds a checklist of what only a person can check: how something feels, looks, or sounds, or behaviour on real hardware. It collects these for one round of testing later, so it is never split up, and it closes when the checklist is done.
 
-First look for it, and create it only if it does not exist:
+**Plan the checks now; write nothing yet.** Everything in this step goes into the plan you show in step 8, and changes GitHub only after the user approves it there. A dry run never reaches the writes.
+
+First look for the issue. This lookup only reads:
 
 ```bash
 gh issue list --repo OWNER/REPO --state open --milestone "<milestone>" --search "\"Manual QA\" in:title" --json number,title
 ```
 
-Add new checks to the existing body, and keep every box and heading already there. Group them under a heading that names the work, for example `## #609, #612: signal displays`. Each check is one line a person can do with no other context: what to do and what should happen. Check for the same check before adding it.
+Draft the new checks for the existing body, keeping every box and heading already there. Group them under a heading that names the work, for example `## #609, #612: signal displays`. Each check is one line a person can do with no other context: what to do and what should happen. Check for the same check before adding it. If there is no Manual QA issue yet, plan to create one.
+
+**After the user approves in step 8,** edit the existing issue, or create it if it was missing:
 
 ```bash
-gh issue view N --repo OWNER/REPO --json body --jq .body > body.md   # edit: add a section
+gh issue view N --repo OWNER/REPO --json body --jq .body > body.md   # edit: add the approved section
 gh issue edit N --repo OWNER/REPO --body-file body.md
 ```
 

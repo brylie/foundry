@@ -52,18 +52,28 @@ def project_info(owner, number):
     return project_id, single_select
 
 
-def find_item(repo, issue_number, project_number):
+def find_item(repo, issue_number, project_id):
+    """The issue's item on the project, matched by the project's node ID: a
+    project number names a project only under its owner, so another owner's
+    project of the same number must not match."""
     owner, name = repo.split("/")
     query = (
         "query($owner:String!,$name:String!,$n:Int!){repository(owner:$owner,name:$name)"
-        "{issue(number:$n){projectItems(first:20){nodes{id project{number}}}}}}"
+        "{issue(number:$n){projectItems(first:20){nodes{id project{id}}}}}}"
     )
     out = gh("api", "graphql", "-f", f"query={query}", "-F", f"owner={owner}", "-F", f"name={name}",
              "-F", f"n={issue_number}").stdout
     for node in json.loads(out)["data"]["repository"]["issue"]["projectItems"]["nodes"]:
-        if node["project"]["number"] == project_number:
+        if node["project"]["id"] == project_id:
             return node["id"]
     return None
+
+
+def open_issues_by_title(repo):
+    """Every open issue (not pull request) by title, all pages, so a rerun never files a duplicate."""
+    out = gh("api", "--paginate", f"repos/{repo}/issues?state=open&per_page=100",
+             "--jq", ".[] | select(.pull_request == null) | {number, title, url: .html_url}").stdout
+    return {issue["title"]: issue for issue in (json.loads(line) for line in out.splitlines() if line.strip())}
 
 
 def main():
@@ -102,8 +112,7 @@ def main():
     if problems:
         sys.exit("Plan has problems, nothing was changed:\n- " + "\n- ".join(problems))
 
-    open_issues = {i["title"]: i for i in json.loads(gh("issue", "list", "--repo", repo, "--state", "open",
-                                                          "--limit", "1000", "--json", "number,title,url").stdout)}
+    open_issues = open_issues_by_title(repo)
     for issue in plan["issues"]:
         summary = " | ".join(f"{k} {v}" for k, v in issue.get("fields", {}).items())
         if args.dry_run:
@@ -129,7 +138,7 @@ def main():
             item = None
             # A project workflow may add new issues on its own, a moment later.
             for _ in range(5):
-                item = find_item(repo, number, project["number"])
+                item = find_item(repo, number, project_id)
                 if item:
                     break
                 added = gh("project", "item-add", str(project["number"]), "--owner", project["owner"],

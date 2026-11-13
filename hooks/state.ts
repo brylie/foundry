@@ -66,19 +66,120 @@ export function renderState(batch: Batch): string {
   return lines.join('\n')
 }
 
-/** The batch a state comment holds, or undefined when the body is not one. */
+/** The batch a state comment holds, or undefined when the body is not a whole, well-formed one. */
 export function parseState(body: string): Batch | undefined {
   if (!body.includes(STATE_MARKER)) return undefined
   const match = /```json\n([\s\S]*?)\n```/.exec(body)
   if (!match?.[1]) return undefined
   try {
-    const data = JSON.parse(match[1]) as { foundry?: number; batch?: Batch }
-    if (data.foundry !== STATE_VERSION || typeof data.batch?.lead !== 'number') return undefined
+    const data = JSON.parse(match[1]) as { foundry?: unknown; batch?: unknown }
 
-    return data.batch
+    return data.foundry === STATE_VERSION && isBatch(data.batch) ? data.batch : undefined
   } catch {
     return undefined
   }
+}
+
+// ---------------------------------------------------------------------------
+// A stored record is checked field by field against `Batch`, so one malformed
+// comment is skipped rather than breaking the sync of every batch.
+
+type Shape = Record<string, unknown>
+
+const isObject = (v: unknown): v is Shape => typeof v === 'object' && v !== null && !Array.isArray(v)
+const isString = (v: unknown): v is string => typeof v === 'string'
+const isNumber = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v)
+const isInt = (v: unknown): v is number => Number.isInteger(v)
+const isOptional = (v: unknown, check: (v: unknown) => boolean) => v === undefined || check(v)
+const isListOf = (v: unknown, check: (v: unknown) => boolean) => Array.isArray(v) && v.every(check)
+const isOneOf = (values: readonly string[]) => (v: unknown) => isString(v) && values.includes(v)
+
+const STAGES = ['plan', 'build', 'ship', 'done'] as const
+const VERDICT = ['ready', 'revise', 'rethink'] as const
+const WAITS = ['signoff', 'conflict', 'round-limit', 'bot-timeout', 'bot-comment', 'merge', 'tamper'] as const
+const LIGHTS = ['pass', 'fail', 'pending', 'none'] as const
+const BOT_LIGHTS = ['waiting', 'busy', 'reviewed', 'changes', 'comment', 'dismissed', 'timeout'] as const
+
+function isReview(v: unknown): boolean {
+  return (
+    isObject(v) &&
+    isOneOf(['plan', 'build'])(v['stage']) &&
+    isString(v['perspective']) &&
+    isString(v['reviewer']) &&
+    isOneOf(VERDICT)(v['verdict']) &&
+    isString(v['summary']) &&
+    isInt(v['round']) &&
+    isInt(v['epoch']) &&
+    isNumber(v['at'])
+  )
+}
+
+function isLogEntry(v: unknown): boolean {
+  return isObject(v) && isInt(v['n']) && isNumber(v['at']) && isString(v['text']) && isOptional(v['isForAgent'], b => typeof b === 'boolean')
+}
+
+function isWaiting(v: unknown): boolean {
+  return (
+    isObject(v) &&
+    isOneOf(WAITS)(v['kind']) &&
+    isString(v['summary']) &&
+    isNumber(v['at']) &&
+    isOptional(v['perspectives'], p => isListOf(p, isString)) &&
+    isOptional(v['bots'], b => isListOf(b, isString))
+  )
+}
+
+function isShip(v: unknown): boolean {
+  return (
+    isObject(v) &&
+    isInt(v['pr']) &&
+    isString(v['url']) &&
+    isString(v['head']) &&
+    isNumber(v['headSeenAt']) &&
+    isOneOf(LIGHTS)(v['ci']) &&
+    isListOf(v['checks'], c => isObject(c) && isString(c['name']) && isOneOf(LIGHTS)(c['light'])) &&
+    isListOf(v['bots'], b => isObject(b) && isString(b['login']) && isOneOf(BOT_LIGHTS)(b['light'])) &&
+    isInt(v['openThreads']) &&
+    typeof v['isMerged'] === 'boolean' &&
+    isNumber(v['checkedAt']) &&
+    isListOf(v['dismissed'], isString) &&
+    isOptional(v['notice'], isString)
+  )
+}
+
+export function isBatch(v: unknown): v is Batch {
+  if (!isObject(v)) return false
+  const rounds = v['rounds']
+  const tests = v['tests']
+
+  return (
+    isString(v['repo']) &&
+    isInt(v['lead']) &&
+    isString(v['title']) &&
+    isListOf(v['issues'], isInt) &&
+    (v['issues'] as unknown[]).length > 0 &&
+    isOneOf(STAGES)(v['stage']) &&
+    isObject(rounds) &&
+    isInt(rounds['plan']) &&
+    isInt(rounds['build']) &&
+    isInt(rounds['ship']) &&
+    isInt(v['epoch']) &&
+    isListOf(v['vetoes'], isString) &&
+    isOptional(v['waiting'], isWaiting) &&
+    isOptional(tests, t => isObject(t) && isOneOf(LIGHTS)(t['light']) && isString(t['command']) && isString(t['summary']) && isNumber(t['at'])) &&
+    isOptional(v['ship'], isShip) &&
+    isListOf(v['reviews'], isReview) &&
+    isListOf(v['log'], isLogEntry) &&
+    isListOf(v['reviewers'], isString) &&
+    (v['reviewers'] as unknown[]).length > 0 &&
+    isInt(v['maxRounds']) &&
+    isListOf(v['onlineReviewers'], isString) &&
+    isNumber(v['botTimeoutMinutes']) &&
+    isString(v['owner']) &&
+    isOptional(v['commentId'], isInt) &&
+    isInt(v['rev']) &&
+    isNumber(v['startedAt'])
+  )
 }
 
 /** The record compared for edits: the batch as JSON, without what only this machine knows. */

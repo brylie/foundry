@@ -37,14 +37,28 @@ export async function ensureLabels($: EngineInterface, repo: string): Promise<vo
   }
 }
 
-/** Sets an issue's or pull request's Foundry labels, leaving every other label alone. */
+const isFoundryLabel = (name: string) => name === 'foundry' || name.startsWith('foundry:')
+
+/**
+ * Sets an issue's or pull request's Foundry labels. It adds and removes
+ * Foundry's own labels one by one and never replaces the whole set, so a
+ * label someone else adds or removes meanwhile is left as they made it.
+ */
 async function setLabels($: EngineInterface, repo: string, number: number, wanted: string[]): Promise<void> {
-  const current = await ghJson<{ name: string }[]>($, ['api', `repos/${repo}/issues/${number}/labels`])
-  const others = current.map(l => l.name).filter(name => name !== 'foundry' && !name.startsWith('foundry:'))
-  const next = [...others, ...wanted]
-  const before = current.map(l => l.name).sort().join(',')
-  if ([...next].sort().join(',') === before) return
-  await gh($, ['api', '-X', 'PUT', `repos/${repo}/issues/${number}/labels`, '--input', '-'], JSON.stringify({ labels: next }))
+  const current = (await ghJson<{ name: string }[]>($, ['api', `repos/${repo}/issues/${number}/labels?per_page=100`])).map(l => l.name)
+  const add = wanted.filter(name => !current.includes(name))
+  const remove = current.filter(name => isFoundryLabel(name) && !wanted.includes(name))
+  if (add.length > 0) {
+    await gh($, ['api', '-X', 'POST', `repos/${repo}/issues/${number}/labels`, '--input', '-'], JSON.stringify({ labels: add }))
+  }
+  for (const name of remove) {
+    await gh($, ['api', '-X', 'DELETE', `repos/${repo}/issues/${number}/labels/${encodeURIComponent(name)}`])
+  }
+}
+
+/** The GitHub login the mod writes as: only state comments by it are read back. */
+export async function currentLogin($: EngineInterface): Promise<string> {
+  return (await gh($, ['api', 'user', '--jq', '.login'])).trim()
 }
 
 /** Writes the batch's state comment and labels. Returns the batch with its comment id. */
@@ -57,8 +71,11 @@ export async function writeBatch($: EngineInterface, batch: Batch): Promise<Batc
   } else {
     try {
       await gh($, ['api', '-X', 'PATCH', `repos/${batch.repo}/issues/comments/${commentId}`, '--input', '-'], body)
-    } catch {
-      // The comment was deleted: write it again.
+    } catch (error) {
+      // Only a comment that is gone is written again; any other failure is
+      // reported, and the next sync retries it, so an outage never leaves a
+      // second state comment behind.
+      if (!/HTTP 404|Not Found/i.test(error instanceof Error ? error.message : String(error))) throw error
       const made = await ghJson<{ id: number }>($, ['api', '-X', 'POST', `repos/${batch.repo}/issues/${batch.lead}/comments`, '--input', '-'], body)
       commentId = made.id
     }
@@ -71,27 +88,51 @@ export async function writeBatch($: EngineInterface, batch: Batch): Promise<Batc
   return { ...batch, commentId }
 }
 
-type Comment = { id: number; body: string }
+type Comment = { id: number; body: string; user: string }
 
-/** The state comment on an issue, with its id, or undefined when it has none. */
-export async function readStateComment($: EngineInterface, repo: string, issue: number): Promise<{ batch: Batch; commentId: number } | undefined> {
-  const comments = await ghJson<Comment[]>($, ['api', `repos/${repo}/issues/${issue}/comments?per_page=100`])
-  for (const comment of [...comments].reverse()) {
+/**
+ * The latest state comment on an issue, or undefined when it has none. Every
+ * page of comments is read. A record counts only when the mod's own account
+ * wrote it and it names this repository and this issue as its lead, so a
+ * copy someone else posts, or one moved from another issue, is ignored.
+ */
+export async function readStateComment(
+  $: EngineInterface,
+  repo: string,
+  issue: number,
+  writer: string,
+  pinned?: number,
+): Promise<{ batch: Batch; commentId: number } | undefined> {
+  const out = await gh($, ['api', '--paginate', `repos/${repo}/issues/${issue}/comments?per_page=100`, '--jq', '.[] | {id, body, user: .user.login}'])
+  const comments = out
+    .split('\n')
+    .filter(Boolean)
+    .map(line => JSON.parse(line) as Comment)
+  let found: { batch: Batch; commentId: number } | undefined
+  for (const comment of comments) {
+    if (comment.user.toLowerCase() !== writer.toLowerCase()) continue
     const batch = parseState(comment.body)
-    if (batch !== undefined) return { batch, commentId: comment.id }
+    if (batch === undefined || batch.repo !== repo || batch.lead !== issue) continue
+    // The comment this session knows the batch by wins over any other, so a second one posted beside it is ignored.
+    if (comment.id === pinned) return { batch, commentId: comment.id }
+    if (found === undefined || comment.id > found.commentId) found = { batch, commentId: comment.id }
   }
 
-  return undefined
+  return found
 }
 
-/** Every open batch in the repository, read from its state comment. */
-export async function loadBatches($: EngineInterface, repo: string): Promise<Batch[]> {
+/**
+ * Every open batch in the repository, read from its state comment.
+ * `pinned` maps a lead issue to the comment id this session knows it by.
+ */
+export async function loadBatches($: EngineInterface, repo: string, pinned: Record<number, number> = {}): Promise<Batch[]> {
+  const writer = await currentLogin($)
   const issues = await ghJson<{ number: number }[]>($, ['issue', 'list', '-R', repo, '--label', 'foundry', '--state', 'open', '--limit', '100', '--json', 'number'])
   const seen = new Set<number>()
   const found: Batch[] = []
   for (const { number } of issues.sort((a, b) => a.number - b.number)) {
     if (seen.has(number)) continue
-    const read = await readStateComment($, repo, number)
+    const read = await readStateComment($, repo, number, writer, pinned[number])
     if (read === undefined) continue
     for (const n of read.batch.issues) seen.add(n)
     found.push({ ...read.batch, commentId: read.commentId })
@@ -104,13 +145,16 @@ const PR_QUERY = `query($owner: String!, $name: String!, $number: Int!) {
   repository(owner: $owner, name: $name) {
     pullRequest(number: $number) {
       number url state headRefOid
-      commits(last: 1) { nodes { commit { committedDate statusCheckRollup { contexts(first: 100) { nodes {
-        __typename
-        ... on CheckRun { name status conclusion }
-        ... on StatusContext { context state }
-      } } } } } }
+      commits(last: 1) { nodes { commit { committedDate statusCheckRollup { contexts(first: 100) {
+        pageInfo { hasNextPage }
+        nodes {
+          __typename
+          ... on CheckRun { name status conclusion }
+          ... on StatusContext { context state }
+        }
+      } } } } }
       reviews(last: 100) { nodes { author { login } state submittedAt commit { oid } } }
-      reviewThreads(first: 100) { nodes { isResolved comments(first: 1) { nodes { author { login } } } } }
+      reviewThreads(first: 100) { pageInfo { hasNextPage } nodes { isResolved comments(first: 1) { nodes { author { login } } } } }
       comments(last: 100) { nodes { author { login } body updatedAt } }
     }
   }

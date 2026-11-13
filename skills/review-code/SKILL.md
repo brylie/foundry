@@ -76,7 +76,7 @@ The coding agent records each review's verdict on its Foundry batch (`mcp__found
 
 Sending is part of this skill, so do not ask first when exactly one session matches.
 
-1. Find the session. Use `mcp__ccd_session_mgmt__list_sessions` and `ListAgents`, loading them with `ToolSearch` if they are deferred. Skip archived sessions.
+1. Find the session. Use `mcp__ccd_session_mgmt__list_sessions` and `ListAgents`, loading them with `ToolSearch` if they are deferred. Skip archived sessions. Keep only sessions whose `cwd` is a checkout of this repository: compare `git -C <cwd> rev-parse --path-format=absolute --git-common-dir` with your own, as absolute paths, because worktrees share it. Branch names and PR numbers repeat across repositories.
 2. Match on the **branch and PR number**, never on the title. Several sessions can share a title. Prefer a session whose `branch` is the PR's head branch.
 3. **Rule out this session.** A review session can be bound to the same PR, so its own row can look like a match. `mcp__ccd_session_mgmt__get_session` with `self` gives its ID. Also rule out any session that has no `branch`, because it has no checkout of the work.
 4. Choose by what you found:

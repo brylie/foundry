@@ -28,15 +28,18 @@ def issues_project(repo, sample=10):
     query = (
         "query($owner:String!,$name:String!,$n:Int!){repository(owner:$owner,name:$name)"
         "{issues(first:$n,states:OPEN,orderBy:{field:CREATED_AT,direction:DESC})"
-        "{nodes{projectItems(first:10){nodes{project{number closed}}}}}}}"
+        "{nodes{projectItems(first:10){nodes{project{number closed owner{...on User{login} ...on Organization{login}}}}}}}}}"
     )
     out = gh("api", "graphql", "-f", f"query={query}", "-F", f"owner={owner}", "-F", f"name={name}",
              "-F", f"n={sample}")
+    # A project number names a project only under its owner, so count (owner, number) pairs.
     counts = {}
     for issue in json.loads(out)["data"]["repository"]["issues"]["nodes"]:
         for item in issue["projectItems"]["nodes"]:
-            if not item["project"]["closed"]:
-                counts[item["project"]["number"]] = counts.get(item["project"]["number"], 0) + 1
+            project = item["project"]
+            if not project["closed"]:
+                key = ((project.get("owner") or {}).get("login", owner), project["number"])
+                counts[key] = counts.get(key, 0) + 1
     if not counts:
         return None
     return max(counts, key=counts.get)
@@ -68,11 +71,14 @@ def main():
         if not p.get("closed"):
             print(f"- #{p['number']} {p['title']} ({p['items']['totalCount']} items) {p['url']}")
 
-    project = args.project if args.project is not None else issues_project(repo)
-    if project is None:
+    found = (owner, args.project) if args.project is not None else issues_project(repo)
+    if found is None:
         print("\nThis repository's newest open issues are on no project, so a plan needs no `project`.")
+        project = None
     else:
-        print(f"\nThis repository's issues are on project #{project}. Use it in the plan, "
+        owner, project = found
+        print(f"\nThis repository's issues are on {owner}'s project #{project}. Use "
+              f'{{"owner": "{owner}", "number": {project}}} in the plan, '
               "and set every single-select field below that the board sorts by (Priority and Size).")
         print(f"\n## Project #{project} fields")
         fields = json.loads(gh("project", "field-list", str(project), "--owner", owner, "--format", "json"))
@@ -84,6 +90,9 @@ def main():
     print("\n## Open issues")
     issues = json.loads(gh("issue", "list", "--repo", repo, "--state", "open", "--limit", "500",
                            "--json", "number,title,labels,milestone"))
+    if len(issues) == 500:
+        print("(warning: this list stops at 500 open issues; before filing, also search with "
+              "`gh issue list --search` for each candidate's keywords)")
     for i in sorted(issues, key=lambda i: i["number"]):
         labels = ",".join(l["name"] for l in i["labels"])
         milestone = (i.get("milestone") or {}).get("title", "-")

@@ -13,14 +13,18 @@ export type PrData = {
   headRefOid: string
   commits: { nodes: { commit: { committedDate: string; statusCheckRollup: Rollup | null } }[] }
   reviews: { nodes: { author: Actor; state: string; submittedAt: string; commit: { oid: string } | null }[] }
-  reviewThreads: { nodes: { isResolved: boolean; comments: { nodes: { author: Actor }[] } }[] }
+  reviewThreads: { pageInfo?: PageInfo; nodes: { isResolved: boolean; comments: { nodes: { author: Actor }[] } }[] }
   comments: { nodes: { author: Actor; body: string; updatedAt: string }[] }
 }
 
 type Actor = { login: string } | null
 
+/** Whether more results lie past the page read: a gate never goes green on part of a list. */
+type PageInfo = { hasNextPage: boolean }
+
 type Rollup = {
   contexts: {
+    pageInfo?: PageInfo
     nodes: (
       | { __typename: 'CheckRun'; name: string; status: string; conclusion: string | null }
       | { __typename: 'StatusContext'; context: string; state: string }
@@ -83,16 +87,27 @@ export function readShip(batch: Batch, prior: Ship, pr: PrData, now: number): Sh
   const headSeenAt = isNewHead ? now : prior.headSeenAt
 
   const checks = (commit?.statusCheckRollup?.contexts.nodes ?? []).map(checkLight)
-  const ci = ciLight(checks)
+  // More checks than one page holds: a failure could be on the next page, so it is never read as green.
+  const isPartialChecks = commit?.statusCheckRollup?.contexts.pageInfo?.hasNextPage === true
+  const isPartialThreads = pr.reviewThreads.pageInfo?.hasNextPage === true
+  const ciRead = ciLight(checks)
+  const ci = isPartialChecks && ciRead === 'pass' ? 'pending' : ciRead
 
-  // Every author's latest review of the head commit. Reviews under the
-  // person's own account count as feedback here, never as their sign-off.
-  const latestOnHead = new Map<string, string>()
+  // Reviews of the head commit, by author. Reviews under the person's own
+  // account count as feedback here, never as their sign-off.
+  // `reviewedBy`: authors with a review that stands (a dismissed one does not).
+  // `opinion`: each author's latest approval or change request, which a later
+  // plain comment does not clear, as on GitHub; a dismissal does.
+  const reviewedBy = new Set<string>()
+  const opinion = new Map<string, string>()
   for (const review of pr.reviews.nodes) {
     if (review.commit?.oid !== head || !review.author) continue
-    latestOnHead.set(loginKey(review.author.login), review.state)
+    const login = loginKey(review.author.login)
+    if (review.state === 'APPROVED' || review.state === 'COMMENTED' || review.state === 'CHANGES_REQUESTED') reviewedBy.add(login)
+    if (review.state === 'APPROVED' || review.state === 'CHANGES_REQUESTED') opinion.set(login, review.state)
+    if (review.state === 'DISMISSED') opinion.delete(login)
   }
-  const changesBy = [...latestOnHead].filter(([, state]) => state === 'CHANGES_REQUESTED').map(([login]) => login)
+  const changesBy = [...opinion].filter(([, state]) => state === 'CHANGES_REQUESTED').map(([login]) => login)
 
   const openThreads = pr.reviewThreads.nodes.filter(t => !t.isResolved)
   const threadsBy = new Map<string, number>()
@@ -108,7 +123,7 @@ export function readShip(batch: Batch, prior: Ship, pr: PrData, now: number): Sh
     if (changesBy.includes(login)) return { login, light: 'changes', detail: 'requested changes' }
     const threads = threadsBy.get(login) ?? 0
     if (threads > 0) return { login, light: 'changes', detail: `${threads} open thread${threads === 1 ? '' : 's'}` }
-    if (latestOnHead.has(login)) return { login, light: 'reviewed' }
+    if (reviewedBy.has(login)) return { login, light: 'reviewed' }
 
     const comment = [...pr.comments.nodes].reverse().find(c => c.author && loginKey(c.author.login) === login)
     const isFresh = comment !== undefined && time(comment.updatedAt) >= headAt
@@ -141,7 +156,7 @@ export function readShip(batch: Batch, prior: Ship, pr: PrData, now: number): Sh
   const timedOut = bots.filter(b => b.light === 'timeout').map(b => b.login)
   const toRead = bots.filter(b => b.light === 'comment').map(b => b.login)
   const isBlocked = changesBy.length > 0 || openThreads.length > 0 || bots.some(b => b.light === 'changes')
-  const isGreen = ci === 'pass' && !isBlocked && bots.every(b => b.light === 'reviewed' || b.light === 'dismissed')
+  const isGreen = ci === 'pass' && !isPartialThreads && !isBlocked && bots.every(b => b.light === 'reviewed' || b.light === 'dismissed')
 
   let waiting: ShipReading['waiting']
   if (timedOut.length > 0) {

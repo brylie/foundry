@@ -20,7 +20,7 @@ Two sessions work one backlog together. The **driver** (this skill) owns the bra
 ## 1. Find the navigator
 
 1. If the argument names a session, use it.
-2. Otherwise list sessions (`mcp__ccd_session_mgmt__list_sessions`, and `ListAgents`; load them with ToolSearch if they are deferred). Rule out this session (`mcp__ccd_session_mgmt__get_session` with `self`) and archived ones. Keep sessions whose `cwd` is a checkout of the same repository. Compare `git -C <cwd> rev-parse --git-common-dir` with your own.
+2. Otherwise list sessions (`mcp__ccd_session_mgmt__list_sessions`, and `ListAgents`; load them with ToolSearch if they are deferred). Rule out this session (`mcp__ccd_session_mgmt__get_session` with `self`) and archived ones. Keep sessions whose `cwd` is a checkout of the same repository. Compare `git -C <cwd> rev-parse --path-format=absolute --git-common-dir` with your own, as absolute paths with links resolved (`realpath`): the plain form can print a relative `.git`, which two unrelated checkouts share.
 3. One candidate: send the handshake. Several: ask the user which one. None: tell the user to run `/foundry:pair-navigator` in another session of this repository. Then wait, because the navigator will find you.
 
 Handshake (first line exactly as shown):

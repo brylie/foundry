@@ -7,10 +7,12 @@ Usage: candidates.py [MILESTONE] [--repo OWNER/NAME] [--project N]
 MILESTONE is a number, a title, or a title prefix like M2. The default is the
 lowest-numbered open milestone that still has open issues. The repository
 defaults to the one `gh` finds from the current directory; the project to the
-one most of the repository's newest issues are on.
+one most of the milestone's issues are on. A project is known by its node ID,
+since a project number names a project only under its owner.
 
 An issue is triaged when the board has both its Priority and Size set and its
-Status is the board's first option (usually Todo) or unset. Priority sorts by
+Status is the board's first option (usually Todo) or unset. An issue on no
+board is never triaged. Priority sorts by
 the order of the field's options (P0 first), then Size (XS first), then number.
 
 It only reads from GitHub. Held-back issues are printed too, because a batch
@@ -61,7 +63,7 @@ ISSUE_FIELDS = """
   labels(first: 30) { nodes { name } }
   assignees(first: 10) { nodes { login } }
   closedByPullRequestsReferences(first: 5, includeClosedPrs: true) { nodes { number } }
-  projectItems(first: 10) { nodes { project { number } fieldValues(first: 30) { nodes {
+  projectItems(first: 10) { nodes { project { id number owner { ... on User { login } ... on Organization { login } } } fieldValues(first: 30) { nodes {
     ... on ProjectV2ItemFieldSingleSelectValue { name field { ... on ProjectV2SingleSelectField { name } } }
   } } } }
 """
@@ -86,36 +88,48 @@ def milestone_issues(owner, name, milestone):
         cursor = page["pageInfo"]["endCursor"]
 
 
-def board_project(issues):
-    """The project most of these issues are on, or None."""
-    counts = {}
+def board_project(issues, number=None):
+    """The project most of these issues are on, as (node ID, owner, number), or None.
+
+    With `number`, only projects of that number count. Projects are told apart
+    by node ID: two owners can each have a project 7.
+    """
+    counts, seen = {}, {}
     for issue in issues:
         for item in issue["projectItems"]["nodes"]:
-            number = item["project"]["number"]
-            counts[number] = counts.get(number, 0) + 1
-    return max(counts, key=counts.get) if counts else None
+            project = item["project"]
+            if number is not None and project["number"] != number:
+                continue
+            seen[project["id"]] = ((project.get("owner") or {}).get("login", "?"), project["number"])
+            counts[project["id"]] = counts.get(project["id"], 0) + 1
+    if not counts:
+        return None
+    best = max(counts, key=counts.get)
+    return best, *seen[best]
 
 
-def field_options(owner, number):
+def field_options(project_id):
     """Each single-select field of the project, as its options in board order."""
-    query = """query($owner: String!, $n: Int!) { %s(login: $owner) { projectV2(number: $n) {
+    query = """query($id: ID!) { node(id: $id) { ... on ProjectV2 {
       fields(first: 50) { nodes { ... on ProjectV2SingleSelectField { name options { name } } } } } } }"""
-    for kind in ("user", "organization"):
-        result = subprocess.run(
-            ["gh", "api", "graphql", "-f", f"query={query % kind}", "-F", f"owner={owner}", "-F", f"n={number}"],
-            text=True, capture_output=True,
-        )
-        if result.returncode != 0:
-            continue
-        data = json.loads(result.stdout).get("data", {}).get(kind)
-        if data and data.get("projectV2"):
-            return {f["name"]: [o["name"] for o in f["options"]] for f in data["projectV2"]["fields"]["nodes"] if f}
-    return {}
+    node = graphql(query, id=project_id).get("node") or {}
+    return {f["name"]: [o["name"] for o in f["options"]] for f in node.get("fields", {}).get("nodes", []) if f}
 
 
-def board_fields(issue, project):
+def open_issue_numbers(repo):
+    """Every open issue number, all pages (the REST list includes pull requests, which do no harm here)."""
+    result = subprocess.run(
+        ["gh", "api", "--paginate", f"repos/{repo}/issues?state=open&per_page=100", "--jq", ".[].number"],
+        text=True, capture_output=True,
+    )
+    if result.returncode != 0:
+        sys.exit(f"gh api repos/{repo}/issues: {result.stderr.strip()}")
+    return {int(n) for n in result.stdout.split()}
+
+
+def board_fields(issue, project_id):
     for item in issue["projectItems"]["nodes"]:
-        if item["project"]["number"] == project:
+        if item["project"]["id"] == project_id:
             return {v["field"]["name"]: v["name"] for v in item["fieldValues"]["nodes"] if v and v.get("field")}
     return None
 
@@ -142,13 +156,18 @@ def other_worktrees(base):
     paths = [t.removeprefix("worktree ") for t in git(".", "worktree", "list", "--porcelain").splitlines() if t.startswith("worktree ")]
     lines = []
     for path in paths:
+        if path == here:
+            continue
+        # Uncommitted work counts however old the last commit is: a new
+        # session's worktree can sit on an old commit.
+        pending = {entry[3:] for entry in git(path, "status", "--porcelain").splitlines()} - {".DS_Store"}
         committed = git(path, "log", "-1", "--format=%ct")
-        if path == here or not committed or time.time() - int(committed) > RECENT_SECONDS:
+        is_old = not committed or time.time() - int(committed) > RECENT_SECONDS
+        if is_old and not pending:
             continue
         branch = git(path, "branch", "--show-current") or "(detached)"
         ahead = git(path, "rev-list", "--count", f"origin/{base}..HEAD") or "?"
-        files = set(git(path, "diff", "--name-only", f"origin/{base}...HEAD").splitlines())
-        files |= {entry[3:] for entry in git(path, "status", "--porcelain").splitlines()}
+        files = set(git(path, "diff", "--name-only", f"origin/{base}...HEAD").splitlines()) | pending
         files.discard(".DS_Store")
         if not files and branch in (base, "(detached)"):
             continue
@@ -172,14 +191,15 @@ def main():
 
     milestone = find_milestone(repo, args.milestone)
     issues = milestone_issues(owner, name, milestone)
-    project = args.project or board_project(issues)
-    options = field_options(owner, project) if project else {}
+    board = board_project(issues, args.project)
+    project_id, project_owner, project = board if board else (None, None, None)
+    options = field_options(project_id) if project_id else {}
     priority_order = options.get("Priority", [])
     size_order = options.get("Size", [])
     statuses = options.get("Status", [])
     ready_status = statuses[0] if statuses else None
 
-    open_numbers = {i["number"] for i in gh("issue", "list", "--repo", repo, "--state", "open", "--limit", "1000", "--json", "number")}
+    open_numbers = open_issue_numbers(repo)
 
     def rank(entry):
         issue, fields = entry
@@ -192,7 +212,7 @@ def main():
         )
 
     groups = {k: [] for k in ("triaged", "untriaged", "waiting", "assigned", "linked", "not_ready", "decision", "started")}
-    entries = sorted(((i, board_fields(i, project) if project else None) for i in issues), key=rank)
+    entries = sorted(((i, board_fields(i, project_id) if project_id else None) for i in issues), key=rank)
     for issue, fields in entries:
         label_names = names(issue["labels"]["nodes"], "name")
         waits = sorted(
@@ -215,9 +235,9 @@ def main():
             groups["decision"].append(line(issue, fields))
         elif waits:
             groups["waiting"].append(line(issue, fields, "waits on " + ", ".join(f"#{n}" for n in waits)))
-        elif project and not is_triaged:
+        elif not is_triaged:
             missing = [f for f in ("Priority", "Size") if not (fields or {}).get(f)]
-            why = f"no {' or '.join(missing)}" if missing else f"Status is {status}"
+            why = "not on the board" if fields is None else f"no {' or '.join(missing)}" if missing else f"Status is {status}"
             groups["untriaged"].append(line(issue, fields, why))
         else:
             groups["triaged"].append(line(issue, fields))
@@ -226,9 +246,9 @@ def main():
 
     where = f"Milestone {milestone['number']}: {milestone['title']}" if milestone else "All open issues (no open milestone)"
     board = (
-        f"project #{project}: Priority {'/'.join(priority_order) or '?'}, Size {'/'.join(size_order) or '?'}, ready Status {ready_status or 'any'}"
-        if project
-        else "no project board found: every issue counts as triaged, in number order"
+        f"{project_owner}'s project #{project}: Priority {'/'.join(priority_order) or '?'}, Size {'/'.join(size_order) or '?'}, ready Status {ready_status or 'any'}"
+        if project_id
+        else "no project board found, so nothing counts as triaged: add the issues to a board with Priority and Size, or pass --project N"
     )
     print(f"{repo} (base {base}). {where} ({len(issues)} open). Board: {board}.")
     for title, key in (

@@ -2,6 +2,7 @@ import { describe, expect, test } from 'claude-code/testing'
 
 import type { Batch, Verdict } from '../types'
 import {
+  appendLog,
   choices,
   currentRound,
   decide,
@@ -15,7 +16,7 @@ import {
   sendBack,
   trackIndex,
 } from '../hooks/model'
-import { labelsFor, parseState, renderState } from '../hooks/state'
+import { isBatch, labelsFor, parseState, renderState } from '../hooks/state'
 
 const FIVE = parseReviewers('product-owner,usability,accessibility,architecture,security')
 const SETTINGS = { reviewers: FIVE, maxRounds: 3, onlineReviewers: parseLogins('coderabbitai[bot],gitar-bot[bot]'), botTimeoutMinutes: 30 }
@@ -103,6 +104,35 @@ describe('the plan and build loops', () => {
     batch = decide(batch, { action: 'approve' }, 2).batch
     expect(batch.stage).toBe('build')
     expect(trackIndex(batch)).toBe(2)
+  })
+})
+
+describe('review findings', () => {
+  test('an extra perspective, such as a navigator, never uses up the rounds', async () => {
+    let batch = start()
+    for (let i = 0; i < 6; i++) {
+      const move = review(batch, 'navigator', 'revise')
+      expect(move.error).toBeUndefined()
+      batch = move.batch
+    }
+    expect(currentRound(batch)).toBe(1)
+    expect(batch.waiting).toBeUndefined()
+  })
+
+  test('the log numbers its lines past what it keeps, so a delivery cursor survives the trim', async () => {
+    let batch = start()
+    for (let i = 0; i < 70; i++) batch = appendLog(batch, i, `line ${i}`, i % 2 === 0)
+    expect(batch.log).toHaveLength(60)
+    expect(batch.log.at(-1)?.n).toBe(71)
+    expect(batch.log[0]?.n).toBe(12)
+  })
+
+  test('a state record missing fields is skipped, not trusted', async () => {
+    const partial = '<!-- foundry:state -->\n```json\n{"foundry":1,"batch":{"lead":12}}\n```'
+    expect(parseState(partial)).toBeUndefined()
+    const wrongStage = renderState({ ...start(), stage: 'shipping' as never })
+    expect(parseState(wrongStage)).toBeUndefined()
+    expect(isBatch(start())).toBe(true)
   })
 })
 

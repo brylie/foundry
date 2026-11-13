@@ -80,8 +80,12 @@ export type Ship = {
   notice?: string
 }
 
-/** One line of a batch's history. `isForAgent` lines are delivered to the owning session. */
-export type LogEntry = { at: number; text: string; isForAgent?: boolean }
+/**
+ * One line of a batch's history. `isForAgent` lines are delivered to the
+ * owning session. `n` counts from 1 and is never reused, so a delivery
+ * cursor survives the log keeping only its last lines.
+ */
+export type LogEntry = { n: number; at: number; text: string; isForAgent?: boolean }
 
 /**
  * A batch: related issues on their way to one pull request. The record
@@ -133,9 +137,12 @@ export type Meta = {
   mine: string | null
   /** The state JSON this session last wrote, per batch, to spot edits made around the mod. */
   written: Record<string, string>
-  /** How many log lines of its own batch this session has delivered to the agent. */
+  /** The `n` of the last log line of each batch this session delivered to the agent. */
   delivered: Record<string, number>
-  /** The last error reading or writing GitHub, per batch. */
+  /**
+   * The last error writing a batch to GitHub. A batch listed here has a
+   * write that did not land: the next sync retries it.
+   */
   errors: Record<string, string>
   syncedAt: number
 }

@@ -97,7 +97,7 @@ export function newBatch(
     epoch: 1,
     vetoes: [],
     reviews: [],
-    log: [{ at: now, text: `Started: ${input.title}` }],
+    log: [{ n: 1, at: now, text: `Started: ${input.title}` }],
     ...settings,
     owner: input.owner,
     rev: 0,
@@ -159,11 +159,15 @@ function notApproved(batch: Batch): string[] {
 /** A move's result: the new batch, or why the move is refused (with the batch it leaves). */
 export type Move = { batch: Batch; error?: string; note?: string }
 
-function log(batch: Batch, at: number, text: string, isForAgent = false): Batch {
-  const entry = isForAgent ? { at, text, isForAgent } : { at, text }
+/** Adds a line to the batch's history, numbered after the last one; the log keeps its last 60. */
+export function appendLog(batch: Batch, at: number, text: string, isForAgent = false): Batch {
+  const n = (batch.log.at(-1)?.n ?? 0) + 1
+  const entry = isForAgent ? { n, at, text, isForAgent } : { n, at, text }
 
   return { ...batch, log: [...batch.log, entry].slice(-60) }
 }
+
+const log = appendLog
 
 function wait(batch: Batch, waiting: Omit<Waiting, 'at'>, at: number): Batch {
   return log({ ...batch, waiting: { ...waiting, at } }, at, `Waiting on you: ${WAIT_LABEL[waiting.kind]}`)
@@ -193,7 +197,9 @@ export function recordReview(
   const stage = batch.stage
   const perspective = perspectiveKey(input.perspective)
   let round = batch.rounds[stage]
-  const isAgain = counted(batch).some(r => r.perspective === perspective && r.round === round)
+  // Only a required reviewer moves the stage's rounds on: an extra one, such as a navigator, never uses them up.
+  const isRequired = batch.reviewers.includes(perspective)
+  const isAgain = isRequired && counted(batch).some(r => r.perspective === perspective && r.round === round)
   if (isAgain) {
     if (round >= batch.maxRounds) {
       const stuck = notApproved(batch)

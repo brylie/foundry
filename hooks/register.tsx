@@ -8,8 +8,9 @@ import type { EngineInterface, Register } from 'claude-code'
 
 import type { Batch, Light, Meta, Verdict } from '../types'
 import { currentRepo, ensureLabels, fetchPr, loadBatches, writeBatch } from './github'
-import { bashActions, editRefusal, refusal, scriptRefusal, stateRefusal } from './guard'
+import { absoluteTarget, bashActions, editRefusal, refusal, scriptRefusal, shellWriteTargets, stateRefusal } from './guard'
 import {
+  appendLog,
   DEFAULT_BOT_TIMEOUT_MINUTES,
   DEFAULT_MAX_ROUNDS,
   DEFAULT_ONLINE_REVIEWERS,
@@ -46,9 +47,9 @@ const POLL_MS = 60_000
 const SYNC_EVERY = 5
 
 // Change a tag when its value's fields change: an older stored value then reads as the initial one.
-const batchesAtom = atom({ plugin: 'foundry', key: 'batches' } as const, [] as Batch[], { shape: 'batches-1' })
+const batchesAtom = atom({ plugin: 'foundry', key: 'batches' } as const, [] as Batch[], { shape: 'batches-2' })
 const EMPTY_META: Meta = { mine: null, written: {}, delivered: {}, errors: {}, syncedAt: 0 }
-const metaAtom = atom({ plugin: 'foundry', key: 'meta' } as const, EMPTY_META, { shape: 'meta-1' })
+const metaAtom = atom({ plugin: 'foundry', key: 'meta' } as const, EMPTY_META, { shape: 'meta-2' })
 
 // Where a person's own command can come from. A peer session, a channel or a
 // plugin is never the person signing off.
@@ -86,11 +87,19 @@ function isActive(batch: Batch | undefined): batch is Batch {
 // -------------------------------------------------------------------------
 // Reading and writing the session's copy, and GitHub behind it.
 
+/**
+ * The batch this session runs: the one it started or took over, as long as
+ * it is still the owner. Once another session takes the batch over, this
+ * session's tools and timer stop acting on it; the person's own presses and
+ * commands on any card are separate and still work.
+ */
 async function mine($: EngineInterface): Promise<Batch | undefined> {
   const meta = await read($, metaAtom)
   if (meta.mine === null) return undefined
+  const batch = (await read($, batchesAtom)).find(b => batchKey(b) === meta.mine)
+  if (batch === undefined || batch.owner !== (await $.session.id())) return undefined
 
-  return (await read($, batchesAtom)).find(b => batchKey(b) === meta.mine)
+  return batch
 }
 
 async function byKey($: EngineInterface, key: string): Promise<Batch | undefined> {
@@ -136,68 +145,126 @@ async function apply($: EngineInterface, key: string, move: (batch: Batch) => Mo
   return { ...result, batch: saved }
 }
 
-/** The log lines meant for the agent that this session has not passed on yet. */
-async function undelivered($: EngineInterface, batch: Batch): Promise<string[]> {
+/** The log lines for the agent that this session has not passed on yet, by their `n`. */
+async function pending($: EngineInterface, batch: Batch): Promise<{ notes: string[]; last: number }> {
   const key = batchKey(batch)
   const meta = await read($, metaAtom)
-  if (meta.mine !== key) return []
-  const notes = batch.log.filter(entry => entry.isForAgent === true)
-  const count = meta.delivered[key] ?? 0
-  // The log keeps its last lines only; a count past them starts over.
-  const start = count > notes.length ? notes.length : count
-  await update($, metaAtom, m => ({ ...m, delivered: { ...m.delivered, [key]: notes.length } }))
+  if (meta.mine !== key) return { notes: [], last: 0 }
+  const cursor = meta.delivered[key] ?? 0
+  const entries = batch.log.filter(entry => entry.isForAgent === true && entry.n > cursor)
 
-  return notes.slice(start).map(entry => entry.text)
+  return { notes: entries.map(entry => entry.text), last: entries.at(-1)?.n ?? cursor }
 }
 
-/** Wakes the agent with what it has not heard, from a press or a timer. */
-async function wake($: EngineInterface, batch: Batch | undefined): Promise<void> {
-  if (batch === undefined) return
-  const notes = await undelivered($, batch)
-  if (notes.length > 0) await $.prompt.submit({ text: `Foundry, "${batch.title}":\n${notes.join('\n')}` })
+async function markDelivered($: EngineInterface, key: string, last: number): Promise<void> {
+  await update($, metaAtom, m => ({ ...m, delivered: { ...m.delivered, [key]: Math.max(m.delivered[key] ?? 0, last) } }))
 }
 
 /**
- * Reads every open batch from GitHub. A batch this session wrote whose
- * comment changed without a newer revision, or vanished, is restored from
- * this session's copy and flagged to the person.
+ * The pending notes, taken to ride in a tool result or a command's context.
+ * A tool call or a command must never submit a prompt itself: the submission
+ * would wait on the very turn, or command, that is waiting on it.
+ */
+async function takeNotes($: EngineInterface, batch: Batch | undefined): Promise<string[]> {
+  if (batch === undefined) return []
+  const { notes, last } = await pending($, batch)
+  if (notes.length > 0) await markDelivered($, batchKey(batch), last)
+
+  return notes
+}
+
+/**
+ * Wakes the agent with what it has not heard. Only the timer and the
+ * person's presses call it, never a tool call or a command. The notes count
+ * as delivered only once the prompt is accepted; a dropped one is tried again
+ * next time.
+ */
+async function deliver($: EngineInterface, batch: Batch | undefined): Promise<void> {
+  if (batch === undefined) return
+  const { notes, last } = await pending($, batch)
+  if (notes.length === 0) return
+  const submitted = await $.prompt.submit({ text: `Foundry, "${batch.title}":\n${notes.join('\n')}` })
+  if (!('drop' in submitted && submitted.drop !== undefined)) await markDelivered($, batchKey(batch), last)
+}
+
+function withNotes(text: string, notes: string[]): string {
+  return notes.length === 0 ? text : `${text}\n\nFoundry news:\n${notes.map(n => `- ${n}`).join('\n')}`
+}
+
+/** A line saying the batch's last write did not reach GitHub, or nothing. */
+async function unsaved($: EngineInterface, key: string): Promise<string> {
+  const error = (await read($, metaAtom)).errors[key]
+
+  return error === undefined ? '' : ` Not saved to GitHub yet (${error}); Foundry retries at its next sync.`
+}
+
+/**
+ * Reads every open batch from GitHub and merges it with this session's copy.
+ *
+ * - A batch this session wrote whose comment changed without a newer
+ *   revision, moved to another comment, or vanished, is restored from this
+ *   session's copy and flagged to the person.
+ * - A write of this session's that did not land is tried again, unless
+ *   GitHub already holds a newer revision from elsewhere.
+ * - A batch another session took over stops being this session's.
+ *
+ * It never wakes the agent: callers deliver what is pending in their own way.
  */
 async function sync($: EngineInterface): Promise<void> {
   const repo = await currentRepo($)
   if (repo === undefined) return
+  const known = await read($, batchesAtom)
+  const pinned = Object.fromEntries(known.flatMap(b => (b.repo === repo && b.commentId !== undefined ? [[b.lead, b.commentId]] : [])))
   let remote: Batch[]
   try {
-    remote = await loadBatches($, repo)
+    remote = await loadBatches($, repo, pinned)
   } catch {
     return
   }
   const now = await $.clock.now()
+  const self = await $.session.id()
   const meta = await read($, metaAtom)
   const local = await read($, batchesAtom)
   const merged: Batch[] = []
   const restore: Batch[] = []
+  const retry: Batch[] = []
+  const superseded: string[] = []
 
   for (const theirs of remote) {
     const key = batchKey(theirs)
     const ours = local.find(b => batchKey(b) === key)
     const wrote = meta.written[key]
-    if (ours !== undefined && wrote !== undefined && theirs.rev <= ours.rev && fingerprint(theirs) !== wrote) {
+    const isMoved = ours?.commentId !== undefined && theirs.commentId !== ours.commentId && ours.owner === self
+    const isEdited = ours !== undefined && wrote !== undefined && theirs.rev <= ours.rev && fingerprint(theirs) !== wrote
+    if (ours !== undefined && (isEdited || isMoved)) {
       restore.push(ours)
       merged.push(ours)
+    } else if (ours !== undefined && ours.rev > theirs.rev) {
+      merged.push(ours)
+      if (meta.errors[key] !== undefined) retry.push(ours)
     } else {
-      merged.push(ours !== undefined && ours.rev > theirs.rev ? ours : theirs)
+      // GitHub's is as new or newer: a pending write of ours is superseded by it.
+      if (ours !== undefined && meta.errors[key] !== undefined) superseded.push(key)
+      merged.push(theirs)
     }
   }
   for (const ours of local) {
     const key = batchKey(ours)
     if (merged.some(b => batchKey(b) === key)) continue
+    const isOwn = ours.repo === repo && isActive(ours) && meta.mine === key && ours.owner === self
     // This session's own batch that vanished from GitHub is put back; others' finished ones stay on the panel.
-    if (ours.repo === repo && isActive(ours) && meta.mine === key && meta.written[key] !== undefined) restore.push(ours)
+    if (isOwn && meta.written[key] !== undefined) restore.push(ours)
+    else if (isOwn && meta.errors[key] !== undefined) retry.push(ours)
     if (ours.repo !== repo || !isActive(ours) || meta.mine === key) merged.push(ours)
   }
 
   await update($, batchesAtom, () => merged)
-  await update($, metaAtom, m => ({ ...m, syncedAt: now }))
+  await update($, metaAtom, m => {
+    const errors = Object.fromEntries(Object.entries(m.errors).filter(([key]) => !superseded.includes(key)))
+    const taken = m.mine !== null && merged.some(b => batchKey(b) === m.mine && b.owner !== self)
+
+    return { ...m, errors, mine: taken ? null : m.mine, syncedAt: now }
+  })
   for (const batch of restore) {
     const flagged: Batch =
       batch.waiting === undefined
@@ -205,43 +272,48 @@ async function sync($: EngineInterface): Promise<void> {
             ...batch,
             waiting: {
               kind: 'tamper',
-              summary: "Foundry's state on GitHub was changed or removed outside the mod. It was restored from this session's copy.",
+              summary: "Foundry's state on GitHub was changed, moved or removed outside the mod. It was restored from this session's copy.",
               at: now,
             },
           }
         : batch
-    await save($, { ...flagged, log: [...flagged.log, { at: now, text: 'Restored the state comment after an outside edit.' }] })
+    await save($, appendLog(flagged, now, 'Restored the state comment after an outside edit.'))
   }
+  for (const batch of retry) await save($, batch)
   await show($)
-  await wake($, await mine($))
 }
 
-/** Reads this session's shipping pull request into its gates. */
+/** The batch has not moved since `before` was read: same revision, epoch, stage and owner. */
+function isUnchanged(before: Batch, now: Batch | undefined): now is Batch {
+  return now !== undefined && now.rev === before.rev && now.epoch === before.epoch && now.stage === before.stage && now.owner === before.owner
+}
+
+/**
+ * Reads this session's shipping pull request into its gates. The reading is
+ * dropped when the batch moved while GitHub was being read (a send-back, a
+ * decision), so a stale poll never overwrites newer state. It never wakes
+ * the agent: callers deliver what is pending in their own way.
+ */
 async function pollShip($: EngineInterface): Promise<void> {
   const batch = await mine($)
   if (!isActive(batch) || batch.stage !== 'ship' || batch.ship === undefined) return
   const prior = batch.ship
+  const key = batchKey(batch)
   let pr
   try {
     pr = await fetchPr($, batch.repo, prior.pr)
-  } catch (error) {
-    const text = error instanceof Error ? error.message : String(error)
-    await update($, metaAtom, m => ({ ...m, errors: { ...m.errors, [batchKey(batch)]: text.slice(0, 300) } }))
-
+  } catch {
+    // A failed read changes nothing; the next poll tries again.
     return
   }
+  if (!isUnchanged(batch, await byKey($, key))) return
   const now = await $.clock.now()
   const reading = readShip(batch, prior, pr, now)
   let ship = reading.ship
   let next: Batch = { ...batch, ship }
 
   if (reading.isMerged) {
-    next = {
-      ...next,
-      stage: 'done',
-      waiting: undefined,
-      log: [...next.log, { at: now, text: `Pull request #${pr.number} merged. The batch is done.`, isForAgent: true }],
-    }
+    next = appendLog({ ...next, stage: 'done', waiting: undefined }, now, `Pull request #${pr.number} merged. The batch is done.`, true)
   } else {
     // The ship stage's own waits come and go with GitHub; a decision of another kind stays until the person makes it.
     const isShipWait = next.waiting === undefined || ['bot-timeout', 'bot-comment', 'merge'].includes(next.waiting.kind)
@@ -251,21 +323,23 @@ async function pollShip($: EngineInterface): Promise<void> {
     }
     if (reading.notice && reading.notice.key !== prior.notice) {
       ship = { ...ship, notice: reading.notice.key }
-      next = { ...next, ship, log: [...next.log, { at: now, text: reading.notice.text, isForAgent: true }] }
+      next = appendLog({ ...next, ship }, now, reading.notice.text, true)
     }
   }
 
   // Lights refresh in this session every minute; GitHub is written only when the record changes.
   const isChanged = fingerprint({ ...next, ship: { ...ship, checkedAt: 0 } }) !== fingerprint({ ...batch, ship: { ...prior, checkedAt: 0 } })
   if (!isChanged) {
-    await update($, batchesAtom, list => list.map(b => (batchKey(b) === batchKey(next) ? next : b)))
+    const fresh = next
+    await update($, batchesAtom, list => list.map(b => (batchKey(b) === key && isUnchanged(batch, b) ? fresh : b)))
 
     return
   }
+  // Checked again just before the write: nothing that moved the batch may be overwritten.
+  if (!isUnchanged(batch, await byKey($, key))) return
   const before = batch.waiting?.kind
   const saved = await save($, next)
   if (saved.waiting !== undefined && saved.waiting.kind !== before) $.ui.toast(`Foundry: waiting on you: ${WAIT_LABEL[saved.waiting.kind]}`)
-  await wake($, saved)
 }
 
 function statusText(batch: Batch | undefined): string | undefined {
@@ -288,6 +362,28 @@ async function repoRoot($: EngineInterface): Promise<string> {
 
 async function commentIds($: EngineInterface): Promise<number[]> {
   return (await read($, batchesAtom)).flatMap(b => (b.commentId === undefined ? [] : [b.commentId]))
+}
+
+/**
+ * A path with its symbolic links resolved, or as given when it does not
+ * exist yet. The plugin may be loaded through a link, so its own folder is
+ * compared by where it really is.
+ */
+async function realPath($: EngineInterface, path: string): Promise<string> {
+  try {
+    return (await $.fs.stat(path, { resolve: true })).realPath ?? path
+  } catch {
+    const slash = path.lastIndexOf('/')
+    if (slash <= 0) return path
+    const parent = await realPath($, path.slice(0, slash))
+
+    return `${parent}${path.slice(slash)}`
+  }
+}
+
+/** The issues and pull requests of the open batches: their labels are Foundry's to keep. */
+async function trackedNumbers($: EngineInterface): Promise<number[]> {
+  return (await read($, batchesAtom)).filter(isActive).flatMap(b => (b.ship ? [...b.issues, b.ship.pr] : b.issues))
 }
 
 /** What the agent reads about a batch: where it stands and what to do next. */
@@ -322,14 +418,18 @@ function describe(batch: Batch): string {
   return lines.join('\n')
 }
 
-/** A person's decision from a press: applies it, then wakes the agent if this session runs the batch. */
+/**
+ * A person's decision from a press: applies it, then wakes the agent if this
+ * session runs the batch. The wake is not awaited: a submitted prompt waits
+ * for the session to be idle, and the press must not wait with it.
+ */
 async function pressDecide($: EngineInterface, key: string, decision: Decision): Promise<void> {
   const now = await $.clock.now()
   const result = await apply($, key, batch => decide(batch, decision, now))
   if (result === undefined || result.error) return
-  await wake($, result.batch)
-  if (decision.action === 'end') await releaseIfMine($, key)
   await afterShipDecision($, decision)
+  void deliver($, await mine($))
+  if (decision.action === 'end') await releaseIfMine($, key)
 }
 
 /** A ship decision (a dismissal, more waiting) re-reads the pull request at once, so the next wait shows now. */
@@ -450,8 +550,12 @@ export const register: Register = (on, options) => {
     let ticks = 0
     $.clock.every(POLL_MS, () => {
       ticks += 1
-      void pollShip($)
-      if (ticks % SYNC_EVERY === 0) void sync($)
+      // The timer is the one background path that wakes the agent; it runs outside any turn.
+      void (async () => {
+        await pollShip($)
+        if (ticks % SYNC_EVERY === 0) await sync($)
+        await deliver($, await mine($))
+      })()
     })
 
     await sync($)
@@ -490,7 +594,7 @@ export const register: Register = (on, options) => {
     const existing = all.find(b => b.repo === repo && b.lead === lead && isActive(b))
     const batch: Batch =
       existing !== undefined
-        ? { ...existing, owner, log: [...existing.log, { at: now, text: 'Taken over by another session.' }] }
+        ? appendLog({ ...existing, owner }, now, 'Taken over by another session.')
         : newBatch({ repo, title, issues, owner }, settings, now)
     try {
       await ensureLabels($, repo)
@@ -501,7 +605,8 @@ export const register: Register = (on, options) => {
     await update($, metaAtom, meta => ({
       ...meta,
       mine: key,
-      delivered: { ...meta.delivered, [key]: batch.log.filter(l => l.isForAgent).length },
+      // What happened before this session took the batch is in the result below, not news to deliver.
+      delivered: { ...meta.delivered, [key]: batch.log.at(-1)?.n ?? 0 },
     }))
     const saved = await save($, batch)
     void openPane($)
@@ -573,8 +678,7 @@ export const register: Register = (on, options) => {
     void openPane($)
 
     return {
-      result:
-        'Asked the person to sign off. End your turn now and tell them what they are signing off; they decide in the Foundry pane or with /foundry approve.',
+      result: `Asked the person to sign off. End your turn now and tell them what they are signing off; they decide in the Foundry pane or with /foundry approve.${await unsaved($, batchKey(batch))}`,
     }
   })
 
@@ -590,10 +694,11 @@ export const register: Register = (on, options) => {
     if (result?.error) return { deny: result.error }
     await pollShip($)
     const after = await mine($)
+    // What the first poll found rides in this result: a tool call never submits a prompt.
+    const notes = await takeNotes($, after)
+    const watching = `Watching pull request #${number}.\n${after ? describe(after) : ''}\n\nWait for CI and the online reviewers; you will be told when something needs you. Do not merge: that is the person's.`
 
-    return {
-      result: `Watching pull request #${number}.\n${after ? describe(after) : ''}\n\nWait for CI and the online reviewers; you will be told when something needs you. Do not merge: that is the person's.`,
-    }
+    return { result: withNotes(watching, notes) }
   })
 
   on('tool.call', { tool: 'mcp__foundry__send_back' }, async ($, e) => {
@@ -622,7 +727,7 @@ export const register: Register = (on, options) => {
       for (const b of others) lines.push(`- #${b.lead} ${b.title}: ${TRACK[trackIndex(b)]}${b.waiting ? ' (waiting on the person)' : ''}`)
     }
 
-    return { result: lines.join('\n') }
+    return { result: withNotes(lines.join('\n'), await takeNotes($, own)) }
   })
 
   // -------------------------------------------------------------------------
@@ -634,7 +739,13 @@ export const register: Register = (on, options) => {
     const input = e as unknown as Record<string, unknown>
     const path = str(input['file_path']) || str(input['notebook_path'])
     const content = [input['content'], input['new_string'], input['new_source']].filter((v): v is string => typeof v === 'string').join('\n')
-    const script = scriptRefusal(path, content, await commentIds($), $.plugin.root)
+    const script = scriptRefusal(
+      await realPath($, path),
+      content,
+      await commentIds($),
+      await realPath($, $.plugin.root),
+      await trackedNumbers($),
+    )
     if (script) return { deny: script }
 
     const batch = await mine($)
@@ -645,7 +756,7 @@ export const register: Register = (on, options) => {
   }).catch(($, e, next) => (next.called ? next(e) : { deny: FAILED }))
 
   on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
-    const state = stateRefusal(e.command, await commentIds($))
+    const state = stateRefusal(e.command, await commentIds($), await trackedNumbers($))
     if (state) return { deny: state }
 
     const batch = await mine($)
@@ -653,6 +764,17 @@ export const register: Register = (on, options) => {
       // Merging is the person's whether or not a batch runs here.
       const why = action === 'merge' || isActive(batch) ? refusal(batch ?? DONE, action) : undefined
       if (why) return { deny: why }
+    }
+
+    // A shell write to the repository is held in the same stages an Edit is.
+    if (isActive(batch)) {
+      const root = await repoRoot($)
+      const cwd = await $.session.cwd()
+      for (const target of shellWriteTargets(e.command)) {
+        const path = absoluteTarget(target, cwd)
+        const why = path === undefined ? undefined : editRefusal(batch, root, path)
+        if (why) return { deny: `${why} (a shell write to ${target})` }
+      }
     }
 
     return next(e)
@@ -680,8 +802,9 @@ export const register: Register = (on, options) => {
     }
     if (verb === 'sync') {
       await sync($)
+      const notes = await takeNotes($, await mine($))
 
-      return { text: 'Synced the batches from GitHub.' }
+      return notes.length > 0 ? { text: 'Synced the batches from GitHub.', context: notes } : { text: 'Synced the batches from GitHub.' }
     }
 
     const all = await read($, batchesAtom)
@@ -717,12 +840,13 @@ export const register: Register = (on, options) => {
     const now = await $.clock.now()
     const result = await apply($, key, b => decide(b, decision, now))
     if (result?.error) return { text: result.error }
-    // A command may not submit a prompt while it holds the command: its notes ride as context instead.
-    const notes = result?.batch ? await undelivered($, result.batch) : []
-    if (decision.action === 'end') await releaseIfMine($, key)
     await afterShipDecision($, decision)
+    // A command may not submit a prompt while it holds the command: its notes ride as context instead.
+    const notes = await takeNotes($, await mine($))
+    if (decision.action === 'end') await releaseIfMine($, key)
+    const text = `Done: ${decision.action}.${await unsaved($, key)}`
 
-    return notes.length > 0 ? { text: `Done: ${decision.action}.`, context: notes } : { text: `Done: ${decision.action}.` }
+    return notes.length > 0 ? { text, context: notes } : { text }
   })
 
   // -------------------------------------------------------------------------

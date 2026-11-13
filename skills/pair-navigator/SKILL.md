@@ -19,7 +19,7 @@ Two sessions work one backlog together. The **driver** (`/foundry:pair-driver`) 
 ## 1. Find the driver
 
 1. If the argument names a session, use it.
-2. Otherwise list sessions (`mcp__ccd_session_mgmt__list_sessions`, and `ListAgents`; load them with ToolSearch if they are deferred). Rule out this session (`mcp__ccd_session_mgmt__get_session` with `self`) and archived ones. Keep sessions whose `cwd` is a checkout of the same repository. Compare `git -C <cwd> rev-parse --git-common-dir` with your own, because worktrees share it.
+2. Otherwise list sessions (`mcp__ccd_session_mgmt__list_sessions`, and `ListAgents`; load them with ToolSearch if they are deferred). Rule out this session (`mcp__ccd_session_mgmt__get_session` with `self`) and archived ones. Keep sessions whose `cwd` is a checkout of the same repository. Compare `git -C <cwd> rev-parse --path-format=absolute --git-common-dir` with your own, as absolute paths with links resolved (`realpath`), because worktrees share it. The plain form can print a relative `.git`, which two unrelated checkouts share.
 3. One candidate: send the handshake. Several: ask the user which one, and describe each by title, branch and last activity. None: tell the user to run `/foundry:pair-driver` in another session of this repository, then stop. The driver finds you and sends the handshake itself.
 
 Handshake (first line exactly as shown, so the other skill can recognise it):

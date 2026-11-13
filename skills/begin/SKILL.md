@@ -49,7 +49,7 @@ python3 "${CLAUDE_SKILL_DIR}/scripts/candidates.py" [MILESTONE] [--repo OWNER/NA
 It prints the repository and its default branch (the **base**), and the milestone's issues:
 
 - **TRIAGED:** both Priority and Size set on the project board and Status the board's first option (usually Todo), in board order: Priority first, then Size (smaller first).
-- **NOT TRIAGED:** missing Priority or Size, or in another Status. Leave these out; name them if they would have fit.
+- **NOT TRIAGED:** missing Priority or Size, in another Status, or on no board at all. Leave these out; name them if they would have fit. With no board found, nothing is triaged: ask the maintainer to add the issues to their board, or run with `--project N`. Issue numbers the maintainer names are the exception: take those as given.
 - **Held back:** assigned (claimed, probably by another session), linked to a pull request, labelled as needing a spec or decision, waiting on an open issue, or already in a Foundry batch. A batch can still collide with these, so check them for overlap.
 - **Other recent worktrees and open PRs:** other sessions may be working there.
 
@@ -107,7 +107,7 @@ Once the plan is signed off:
 3. **Write the plan's answers into the spec,** if the project keeps one.
 4. **Build in the plan's order, one issue per commit,** with the issue number in the subject: `Name the ports instead of bare indexes (#534)`. Put no "Closes" in commits. Meet each "Done when" item by item; a bug gets a test that fails without the fix. Do not build what no issue or spec asks for. If building raises a new behaviour question, or the plan turns out wrong in a way the maintainer would care about, stop and ask.
 5. **Test.** Run the project's checks (the commands its `AGENTS.md`, `CLAUDE.md` or `CONTRIBUTING.md` names, or its task runner) and record each run with `mcp__foundry__tests_record`. Fix causes; never `--no-verify`.
-6. **Review.** Spawn the same reviewers in parallel with the stage `build`. Give each the repository, the branch and base, the head commit, the issues, and the approved plan. Record each verdict, fix what is right (say why to a reviewer whose finding you decline), commit, re-test, and re-run the reviewers that have not approved. Conflicts and the round limit work as in the plan loop.
+6. **Review.** Spawn the same reviewers in parallel with the stage `build`. Give each the repository, the branch and base, the head commit, the issues, and the approved plan. Record each verdict, fix what is right (say why to a reviewer whose finding you decline), commit, re-test, and re-run the reviewers that have not approved. If a fix touches what an approving reviewer checked, re-run it too: its approval was of the earlier commit. Conflicts and the round limit work as in the plan loop.
 
 **Dropping an issue.** If an issue turns out much bigger, or needs a decision the maintainer cannot give now, drop it: unassign it, revert what only it needed, and comment on the issue if you learned something. Finish the rest.
 

@@ -224,19 +224,31 @@ function isWriting(command: string): boolean {
   return false
 }
 
-function protectedThing(text: string, commentIds: number[]): string | undefined {
+// A whole issue's labels, replaced (PUT) or cleared (DELETE): that drops Foundry's labels without naming them.
+const BULK_LABELS = /issues\/(\d+)\/labels(?![/\w%])/gi
+const REPLACING = /(?:^|\s)(?:-X\s*|--method[=\s]+|--request[=\s]+)['"]?(?:PUT|DELETE)\b|\b(?:requests|axios|http)\.(?:put|delete)\b|method\s*[:=]\s*['"](?:PUT|DELETE)['"]/i
+
+function protectedThing(text: string, commentIds: number[], tracked: number[]): string | undefined {
   for (const { pattern, what } of PROTECTED) if (pattern.test(text)) return what
   for (const id of commentIds) {
     if (new RegExp(`comments/${id}\\b`).test(text)) return "Foundry's state comment"
+  }
+  if (REPLACING.test(text)) {
+    for (const match of text.matchAll(BULK_LABELS)) {
+      if (tracked.includes(Number(match[1]))) return "Foundry's labels (replacing or clearing every label of a tracked issue)"
+    }
   }
 
   return undefined
 }
 
-/** Why a Bash command is refused for touching what only the mod writes. */
-export function stateRefusal(command: string, commentIds: number[]): string | undefined {
+/**
+ * Why a Bash command is refused for touching what only the mod writes.
+ * `tracked` lists the issues and pull requests of the open batches.
+ */
+export function stateRefusal(command: string, commentIds: number[], tracked: number[] = []): string | undefined {
   if (!isWriting(command)) return undefined
-  const what = protectedThing(command, commentIds)
+  const what = protectedThing(command, commentIds, tracked)
   if (what === undefined) return undefined
 
   return `Foundry: only the Foundry mod changes ${what}. Use the mcp__foundry__ tools; the person decides gates in the Foundry pane.`
@@ -245,10 +257,57 @@ export function stateRefusal(command: string, commentIds: number[]): string | un
 const SCRIPT = /\.(sh|bash|zsh|py|js|mjs|cjs|ts|mts|rb|pl|php|ps1)$/i
 
 /** Why writing a script is refused: a script could touch the protected state where the Bash guard cannot see. */
-export function scriptRefusal(path: string, content: string, commentIds: number[], pluginRoot: string): string | undefined {
+export function scriptRefusal(
+  path: string,
+  content: string,
+  commentIds: number[],
+  pluginRoot: string,
+  tracked: number[] = [],
+): string | undefined {
   if (!SCRIPT.test(path) || isInside(pluginRoot, path)) return undefined
-  const what = protectedThing(content, commentIds)
+  const what = protectedThing(content, commentIds, tracked)
   if (what === undefined) return undefined
 
   return `Foundry: that script would change ${what}, which only the Foundry mod writes. Use the mcp__foundry__ tools.`
+}
+
+// ---------------------------------------------------------------------------
+// Files a shell command writes, best effort, so the stages that hold edits
+// hold them from Bash too.
+
+const QUOTED = /'[^']*'|"(?:[^"\\]|\\.)*"/g
+// `> file`, `>> file`, `1> file`, `&> file`; never `2>&1`.
+const REDIRECT = /(?:^|[^<>&\d])(?:\d|&)?>>?(?!&)\s*([^\s;&|<>()]+)/g
+const WRITES_ARGS = new Set(['tee', 'touch', 'rm', 'rmdir', 'truncate', 'mkdir', 'unlink'])
+const WRITES_LAST = new Set(['cp', 'mv', 'install', 'ln', 'rsync'])
+
+/**
+ * The paths a command writes or removes: redirections, `tee`, `touch`, `rm`,
+ * `truncate`, `mkdir`, the destination of `cp`, `mv`, `install`, `ln` and
+ * `rsync`, and the file `sed -i` or `perl -i` edits in place. A write a
+ * script or a program makes on its own is beyond it.
+ */
+export function shellWriteTargets(command: string): string[] {
+  const targets: string[] = []
+  const bare = command.replace(QUOTED, ' ')
+  for (const match of bare.matchAll(REDIRECT)) if (match[1]) targets.push(match[1])
+
+  for (const tokens of segments(command)) {
+    const at = program(tokens)
+    const name = baseName(tokens[at] ?? '')
+    const args = tokens.slice(at + 1).filter(t => !t.startsWith('-'))
+    if (WRITES_ARGS.has(name)) targets.push(...args)
+    if (WRITES_LAST.has(name) && args.length >= 2) targets.push(args[args.length - 1] ?? '')
+    const inPlace = tokens.slice(at + 1).some(t => /^-[a-zA-Z]*i/.test(t) || t === '--in-place')
+    if ((name === 'sed' || name === 'perl') && inPlace && args.length >= 2) targets.push(args[args.length - 1] ?? '')
+  }
+
+  return [...new Set(targets.filter(t => t && !t.startsWith('/dev/') && !t.startsWith('&')))]
+}
+
+/** A shell target as an absolute path: relative ones are read from the session's folder; `~` is outside any repository. */
+export function absoluteTarget(target: string, cwd: string): string | undefined {
+  if (target.startsWith('~') || target.startsWith('$')) return undefined
+
+  return target.startsWith('/') ? target : `${cwd}/${target}`
 }

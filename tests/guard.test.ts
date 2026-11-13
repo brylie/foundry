@@ -1,7 +1,16 @@
 import { describe, expect, test } from 'claude-code/testing'
 
 import type { Batch } from '../types'
-import { bashActions, editRefusal, isGuardedPath, refusal, scriptRefusal, stateRefusal } from '../hooks/guard'
+import {
+  absoluteTarget,
+  bashActions,
+  editRefusal,
+  isGuardedPath,
+  refusal,
+  scriptRefusal,
+  shellWriteTargets,
+  stateRefusal,
+} from '../hooks/guard'
 import { newBatch } from '../hooks/model'
 
 const SETTINGS = { reviewers: ['security'], maxRounds: 3, onlineReviewers: [], botTimeoutMinutes: 30 }
@@ -35,6 +44,24 @@ describe('commands', () => {
     const waiting = at('build', { waiting: { kind: 'signoff', summary: 's', at: 1 } })
     expect(refusal(waiting, 'commit')).toContain('waiting on the person')
     expect(editRefusal(waiting, '/repo', '/repo/a.ts')).toContain('waiting on the person')
+  })
+})
+
+describe('shell writes', () => {
+  test('finds the files a command writes or removes', async () => {
+    expect(shellWriteTargets('printf x > src/a.ts')).toEqual(['src/a.ts'])
+    expect(shellWriteTargets('echo hi >> /repo/notes.txt 2>&1')).toEqual(['/repo/notes.txt'])
+    expect(shellWriteTargets('npm test 2>/dev/null | tee out.log')).toEqual(['out.log'])
+    expect(shellWriteTargets("sed -i '' 's/a/b/' src/x.ts")).toEqual(['src/x.ts'])
+    expect(shellWriteTargets('cp -r a b && rm -rf build && touch c')).toEqual(['b', 'build', 'c'])
+    expect(shellWriteTargets('echo "a > b" && git status')).toEqual([])
+    expect(shellWriteTargets('sed -n 1,5p src/x.ts')).toEqual([])
+  })
+
+  test('relative targets are read from the session folder; home is outside any repository', async () => {
+    expect(absoluteTarget('src/a.ts', '/repo')).toBe('/repo/src/a.ts')
+    expect(absoluteTarget('/tmp/x', '/repo')).toBe('/tmp/x')
+    expect(absoluteTarget('~/notes', '/repo')).toBeUndefined()
   })
 })
 
@@ -77,6 +104,16 @@ describe("the state only the mod writes", () => {
       'gh pr create --title "Foundry: name the ports" --label enhancement',
     ]
     for (const command of allowed) expect(stateRefusal(command, [555])).toBeUndefined()
+  })
+
+  test('replacing or clearing every label of a tracked issue is refused, though it names no label', async () => {
+    expect(stateRefusal('gh api -X DELETE repos/o/r/issues/3/labels', [], [3])).toContain("Foundry's labels")
+    expect(stateRefusal('gh api --method PUT repos/o/r/issues/3/labels --input x.json', [], [3])).toContain("Foundry's labels")
+    expect(stateRefusal('curl -X PUT https://api.github.com/repos/o/r/issues/3/labels -d @x.json', [], [3])).toContain("Foundry's labels")
+    // An issue in no batch, or adding labels, stays allowed.
+    expect(stateRefusal('gh api -X DELETE repos/o/r/issues/4/labels', [], [3])).toBeUndefined()
+    expect(stateRefusal('gh api -X POST repos/o/r/issues/3/labels -f "labels[]=bug"', [], [3])).toBeUndefined()
+    expect(stateRefusal('gh api -X DELETE repos/o/r/issues/3/labels/bug', [], [3])).toBeUndefined()
   })
 
   test('a script that would write them is refused, outside the plugin itself', async () => {

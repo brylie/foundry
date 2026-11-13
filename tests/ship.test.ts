@@ -138,6 +138,49 @@ describe('online reviewers', () => {
     expect(resolved.waiting?.kind).toBe('merge')
   })
 
+  test('a later plain comment does not clear a change request; a dismissed review is not a review', async () => {
+    const both = [{ login: 'coderabbitai', state: 'COMMENTED' }, { login: 'gitar-bot', state: 'COMMENTED' }]
+    const changed = readShip(
+      batch,
+      prior,
+      pr({ checks: GREEN, reviews: [...both, { login: 'brylie', state: 'CHANGES_REQUESTED' }, { login: 'brylie', state: 'COMMENTED' }] }),
+      T0,
+    )
+    expect(changed.waiting).toBeUndefined()
+    expect(changed.notice?.text).toContain('Changes were requested')
+
+    const lifted = readShip(
+      batch,
+      prior,
+      pr({ checks: GREEN, reviews: [...both, { login: 'brylie', state: 'CHANGES_REQUESTED' }, { login: 'brylie', state: 'DISMISSED' }] }),
+      T0,
+    )
+    expect(lifted.waiting?.kind).toBe('merge')
+
+    const dismissedOnly = readShip(batch, prior, pr({ checks: GREEN, reviews: [{ login: 'coderabbitai', state: 'DISMISSED' }] }), T0)
+    expect(dismissedOnly.ship.bots[0]?.light).toBe('waiting')
+  })
+
+  test('a gate is never green on a partial page of checks or threads', async () => {
+    const both = [{ login: 'coderabbitai', state: 'COMMENTED' }, { login: 'gitar-bot', state: 'COMMENTED' }]
+    const full = pr({ checks: GREEN, reviews: both })
+    const moreChecks: PrData = {
+      ...full,
+      commits: {
+        nodes: full.commits.nodes.map(n => ({
+          commit: { ...n.commit, statusCheckRollup: { contexts: { ...n.commit.statusCheckRollup!.contexts, pageInfo: { hasNextPage: true } } } },
+        })),
+      },
+    }
+    const checksRead = readShip(batch, prior, moreChecks, T0)
+    expect(checksRead.ship.ci).toBe('pending')
+    expect(checksRead.waiting).toBeUndefined()
+
+    const moreThreads = readShip(batch, prior, { ...full, reviewThreads: { ...full.reviewThreads, pageInfo: { hasNextPage: true } } }, T0)
+    expect(moreThreads.ship.ci).toBe('pass')
+    expect(moreThreads.waiting).toBeUndefined()
+  })
+
   test('a new head commit resets the reviewers and the person’s dismissals', async () => {
     const before = { ...prior, head: 'old0000', dismissed: ['gitar-bot@old0000'] }
     const reading = readShip(batch, before, pr({ checks: GREEN }), T0 + 7 * MIN)
