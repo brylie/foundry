@@ -591,6 +591,26 @@ test('a link inside a doc folder, or a shell target the guard cannot place, carr
   expect(ran).toEqual([])
 })
 
+test('a doc folder that is itself a link still takes its plan-loop edits, by Edit and by shell', async ($, on) => {
+  const { ran } = engine(on)
+  on('agent.list', () => ({ value: [{ id: 'po-1', type: 'foundry:product-owner', description: 'requirements', status: 'running' }] as never }))
+  // docs/product is a link to /repo/product.
+  on('fs.stat', (_, e) => ({
+    value: { kind: 'file', size: 0, mtimeMs: 0, isLink: false, realPath: e.path.replace(/^\/repo\/docs\/product(?=\/|$)/, '/repo/product') } as never,
+  }))
+  await $.session.start({ cwd: '/repo', surface: 'desktop', isInteractive: true })
+  await $.tool.call({ tool: 'mcp__foundry__batch_start', title: 'T', issues: [12] })
+
+  const prd = { tool: 'Write', file_path: '/repo/docs/product/slots.md', content: '# Slots' } as const
+  expect((await $.tool.call({ ...prd, agentId: 'po-1' })).deny).toBeUndefined()
+  expect((await $.tool.call(prd)).deny).toBeUndefined()
+  expect((await $.tool.call({ tool: 'Bash', command: 'printf x >> docs/product/slots.md', agentId: 'po-1' })).deny).toBeUndefined()
+  expect((await $.tool.call({ tool: 'Bash', command: 'printf x >> docs/product/slots.md' })).deny).toBeUndefined()
+  // The link's target outside the doc folders is still code.
+  expect((await $.tool.call({ tool: 'Write', file_path: '/repo/product/../src/a.ts', content: 'x', agentId: 'po-1' })).deny).toContain("doesn't edit")
+  expect(ran).toEqual(['printf x >> docs/product/slots.md', 'printf x >> docs/product/slots.md'])
+})
+
 test('with no batch, nothing is guarded but merging, and the panel says so', async ($, on) => {
   const { ran } = engine(on)
   await $.session.start({ cwd: '/repo', surface: 'desktop', isInteractive: true })

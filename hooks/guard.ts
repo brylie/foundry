@@ -171,11 +171,16 @@ export function planDocFolders(batch: Batch, root: string): string[] {
 }
 
 /** Whether `path` is one of the docs the plan loop writes, before any code. */
-export function isPlanDoc(batch: Batch, root: string, path: string): boolean {
-  return path.startsWith('/') && planDocFolders(batch, root).some(folder => isInside(folder, path))
+export function isPlanDoc(batch: Batch, root: string, path: string, folders: string[] = planDocFolders(batch, root)): boolean {
+  return path.startsWith('/') && folders.some(folder => isInside(folder, path))
 }
 
-export function editRefusal(batch: Batch, root: string, path: string): string | undefined {
+/**
+ * `folders` are the plan-loop doc folders as real paths, when the caller
+ * resolved them: a write judged by its real path is compared with folders
+ * judged the same way, so a doc folder that is itself a link still counts.
+ */
+export function editRefusal(batch: Batch, root: string, path: string, folders?: string[]): string | undefined {
   if (batch.stage === 'done' || !isGuardedPath(root, path)) return undefined
   if (batch.waiting !== undefined && batch.waiting.kind !== 'merge') {
     return `Foundry: "${batch.title}" is waiting on the person (${WAIT_LABEL[batch.waiting.kind]}); files in the repository stay unchanged until they decide.`
@@ -183,10 +188,10 @@ export function editRefusal(batch: Batch, root: string, path: string): string | 
   if (batch.stage === 'build') return undefined
   if (batch.stage === 'plan') {
     // Docs first: requirements, specifications and decisions are written and reviewed with the plan.
-    if (isPlanDoc(batch, root, path)) return undefined
-    const folders = PLAN_DOCS.flatMap(kind => batch.docs[kind]).join(', ') || 'none set'
+    if (isPlanDoc(batch, root, path, folders)) return undefined
+    const named = PLAN_DOCS.flatMap(kind => batch.docs[kind]).join(', ') || 'none set'
 
-    return `Foundry: "${batch.title}" has no approved plan yet, so code stays unchanged. Before the plan sign-off only the requirements, specification and decision docs (${folders}) are written, with notes outside the repository or under its .claude/ folder.`
+    return `Foundry: "${batch.title}" has no approved plan yet, so code stays unchanged. Before the plan sign-off only the requirements, specification and decision docs (${named}) are written, with notes outside the repository or under its .claude/ folder.`
   }
 
   return `Foundry: "${batch.title}" is shipping. To change code, call mcp__foundry__send_back first: fixes happen in the build loop.`
@@ -202,10 +207,10 @@ export function isReviewerAgent(type: string | undefined): boolean {
  * do not build: the product owner and architecture co-author the plan-loop
  * docs while the batch is planning, and no reviewer edits anything else.
  */
-export function reviewerEditRefusal(batch: Batch | undefined, root: string, path: string): string | undefined {
+export function reviewerEditRefusal(batch: Batch | undefined, root: string, path: string, folders?: string[]): string | undefined {
   // A path that isn't absolute can't be placed, so it is judged as one inside the repository.
   if (path.startsWith('/') && !isInside(root, path)) return undefined
-  if (batch !== undefined && batch.stage === 'plan' && batch.waiting === undefined && isPlanDoc(batch, root, path)) return undefined
+  if (batch !== undefined && batch.stage === 'plan' && batch.waiting === undefined && isPlanDoc(batch, root, path, folders)) return undefined
 
   return "Foundry: a reviewer agent doesn't edit the repository. In the plan loop the product owner and architecture may edit only the requirements, specification and decision docs; everything else is the oversight agent's to change."
 }

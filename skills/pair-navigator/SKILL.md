@@ -67,7 +67,7 @@ Don't reopen settled choices. Questions only the user can answer go to the user,
 When the driver reports that it is built and walked through, read its local commits in its worktree (`git -C <driver cwd> diff origin/<base>...HEAD`) and the framework source the change relies on. The `foundry:review-code` skill's checks apply: line by line, removed behaviour, tests that would pass for the wrong reason, reuse, and the project's rules. Check its claims in the code, not just its report.
 
 - Findings: send them as one message, most severe first, each with where, the concrete failure and the change.
-- Clean: say so (`Verdict: ready`). The driver then runs the six Foundry reviewers. Tell the user that the build sign-off is their call **in the driver's session**.
+- Clean: say so (`Verdict: ready`). The driver then runs the Foundry reviewers the batch requires. Tell the user that the build sign-off is their call **in the driver's session**.
 
 ## 6. PR, CI and merge
 
