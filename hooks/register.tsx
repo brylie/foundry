@@ -288,16 +288,16 @@ async function unsaved($: EngineInterface, key: string): Promise<string> {
  *
  * It never wakes the agent: callers deliver what is pending in their own way.
  */
-async function sync($: EngineInterface): Promise<void> {
+async function sync($: EngineInterface): Promise<{ error?: string }> {
   const repo = await currentRepo($)
-  if (repo === undefined) return
+  if (repo === undefined) return { error: 'this folder is not a GitHub repository gh can read' }
   const known = await read($, batchesAtom)
   const pinned = Object.fromEntries(known.flatMap(b => (b.repo === repo && b.commentId !== undefined ? [[b.lead, b.commentId]] : [])))
   let remote: Batch[]
   try {
     remote = await loadBatches($, repo, pinned)
-  } catch {
-    return
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : String(error) }
   }
   const now = await $.clock.now()
   const self = await $.session.id()
@@ -379,6 +379,24 @@ async function sync($: EngineInterface): Promise<void> {
   }
   for (const batch of retry) await rewrite($, batch, batch)
   await show($)
+
+  return {}
+}
+
+/**
+ * How a sync went, in words for the person or the agent: the read that
+ * failed, and every write still waiting to reach GitHub.
+ */
+async function syncReport($: EngineInterface, result: { error?: string }): Promise<string> {
+  const lines = [result.error === undefined ? 'Synced the batches from GitHub.' : `Could not sync from GitHub: ${result.error}.`]
+  const meta = await read($, metaAtom)
+  const batches = await read($, batchesAtom)
+  for (const [key, error] of Object.entries(meta.errors)) {
+    const batch = batches.find(b => batchKey(b) === key)
+    lines.push(`Not saved to GitHub yet: ${batch ? `"${batch.title}" (#${batch.lead})` : key}: ${error}. Foundry retries at its next sync.`)
+  }
+
+  return lines.join('\n')
 }
 
 /**
@@ -838,10 +856,10 @@ export const register: Register = (on, options) => {
   })
 
   on('tool.call', { tool: 'mcp__foundry__batch_status' }, async $ => {
-    await sync($)
+    const report = await syncReport($, await sync($))
     const own = await mine($)
     const others = (await read($, batchesAtom)).filter(b => b !== own && isActive(b))
-    const lines = [own ? describe(own) : 'This session runs no Foundry batch.']
+    const lines = [report, '', own ? describe(own) : 'This session runs no Foundry batch.']
     if (others.length > 0) {
       lines.push('', 'Other open batches:')
       for (const b of others) lines.push(`- #${b.lead} ${b.title}: ${TRACK[trackIndex(b)]}${b.waiting ? ' (waiting on the person)' : ''}`)
@@ -921,10 +939,10 @@ export const register: Register = (on, options) => {
       return { text: 'Foundry pane opened.' }
     }
     if (verb === 'sync') {
-      await sync($)
+      const report = await syncReport($, await sync($))
       const notes = await takeNotes($, await mine($))
 
-      return notes.length > 0 ? { text: 'Synced the batches from GitHub.', context: notes } : { text: 'Synced the batches from GitHub.' }
+      return notes.length > 0 ? { text: report, context: notes } : { text: report }
     }
 
     const all = await read($, batchesAtom)

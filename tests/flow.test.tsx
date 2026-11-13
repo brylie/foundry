@@ -509,6 +509,35 @@ test('a first write whose labels fail keeps its comment, and the retry posts no 
   expect(hub.state(12)?.waiting).toBeUndefined()
 })
 
+test('a sync says when its retry fails again or GitHub cannot be read, and only then', async ($, on) => {
+  const { hub } = engine(on)
+  await $.session.start({ cwd: '/repo', surface: 'desktop', isInteractive: true })
+  await $.tool.call({ tool: 'mcp__foundry__batch_start', title: 'T', issues: [12] })
+  await approveAll($)
+  await $.tool.call({ tool: 'mcp__foundry__signoff_request', summary: 'plan' })
+  const sync = () => $.command.run({ command: 'foundry', args: 'sync', origin: { kind: 'composer' }, presentation: SHOWN })
+
+  hub.failOnce(/-X PATCH .*issues\/comments\//)
+  await $.command.run({ command: 'foundry', args: 'approve', origin: { kind: 'composer' }, presentation: SHOWN })
+
+  // The retry fails too: the write is still pending, and the sync says so.
+  hub.failOnce(/-X PATCH .*issues\/comments\//)
+  const retried = await sync()
+  expect(retried.text).toContain('Not saved to GitHub yet: "T" (#12)')
+  expect(hub.state(12)?.stage).toBe('plan')
+
+  // GitHub cannot be read at all.
+  hub.failOnce(/^issue list/)
+  const unread = await sync()
+  expect(unread.text).toContain('Could not sync from GitHub')
+  expect(unread.text).not.toContain('Synced the batches')
+
+  // The next sync lands the write and reports nothing pending.
+  const landed = await sync()
+  expect(landed.text).toBe('Synced the batches from GitHub.')
+  expect(hub.state(12)?.stage).toBe('build')
+})
+
 test('with no batch, nothing is guarded but merging, and the panel says so', async ($, on) => {
   const { ran } = engine(on)
   await $.session.start({ cwd: '/repo', surface: 'desktop', isInteractive: true })
