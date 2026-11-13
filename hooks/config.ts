@@ -2,6 +2,7 @@
 // branch only, so a pull request cannot change the rules it is judged by.
 // Free of `$`, so tests check it directly.
 
+import type { DocFolders } from '../types'
 import type { Settings } from './model'
 import { parseLogins, parseReviewers } from './model'
 
@@ -14,6 +15,7 @@ export type RepoConfig = {
   onlineReviewers?: string[]
   maintainers?: string[]
   botTimeoutMinutes?: number
+  docs?: Partial<DocFolders>
 }
 
 type Value = string | number | boolean | string[]
@@ -24,6 +26,22 @@ const KEYS: Record<string, keyof RepoConfig> = {
   online_reviewers: 'onlineReviewers',
   maintainers: 'maintainers',
   bot_timeout_minutes: 'botTimeoutMinutes',
+}
+
+/** The doc folder keys, each a list of paths relative to the repository root. */
+const DOC_KEYS: Record<string, keyof DocFolders> = {
+  requirements: 'requirements',
+  specifications: 'specifications',
+  decisions: 'decisions',
+  user_docs: 'user',
+}
+
+/** A doc path inside the repository, without a leading `./` or a trailing `/`; undefined for one that leaves it. */
+export function docPath(path: string): string | undefined {
+  const clean = path.trim().replace(/^\.\//, '').replace(/\/+$/, '')
+  if (clean === '' || clean.startsWith('/') || clean.startsWith('~') || clean.split('/').includes('..')) return undefined
+
+  return clean
 }
 
 function stripComment(line: string): string {
@@ -120,9 +138,22 @@ export function readConfig(text: string): { config: RepoConfig; problems: string
   const config: RepoConfig = {}
 
   for (const [key, value] of Object.entries(values)) {
+    const kind = DOC_KEYS[key]
+    if (kind !== undefined) {
+      const list = asList(value)
+      if (list === undefined) {
+        problems.push(`"${key}" must be a list of folders`)
+        continue
+      }
+      const paths = list.map(docPath)
+      const outside = list.filter((_, i) => paths[i] === undefined)
+      if (outside.length > 0) problems.push(`"${key}": ${outside.join(', ')} is not a path inside the repository`)
+      config.docs = { ...config.docs, [kind]: [...new Set(paths.filter((p): p is string => p !== undefined))] }
+      continue
+    }
     const field = KEYS[key]
     if (field === undefined) {
-      problems.push(`unknown setting "${key}" (known: ${Object.keys(KEYS).join(', ')})`)
+      problems.push(`unknown setting "${key}" (known: ${[...Object.keys(KEYS), ...Object.keys(DOC_KEYS)].join(', ')})`)
       continue
     }
     if (field === 'maxRounds' || field === 'botTimeoutMinutes') {
@@ -159,5 +190,11 @@ export function mergeSettings(plugin: Settings, repo: RepoConfig): Settings {
     onlineReviewers: repo.onlineReviewers ?? plugin.onlineReviewers,
     maintainers: repo.maintainers ?? plugin.maintainers,
     botTimeoutMinutes: repo.botTimeoutMinutes ?? plugin.botTimeoutMinutes,
+    docs: {
+      requirements: repo.docs?.requirements ?? plugin.docs.requirements,
+      specifications: repo.docs?.specifications ?? plugin.docs.specifications,
+      decisions: repo.docs?.decisions ?? plugin.docs.decisions,
+      user: repo.docs?.user ?? plugin.docs.user,
+    },
   }
 }

@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 
 import type { Batch, Ship } from '../types'
-import { newBatch, parseLogins } from '../hooks/model'
+import { NO_DOCS, newBatch, parseLogins } from '../hooks/model'
 import { readShip } from '../hooks/ship'
 import type { PrData } from '../hooks/ship'
 
@@ -19,6 +19,7 @@ const batch: Batch = {
       onlineReviewers: parseLogins('coderabbitai[bot],gitar-bot[bot]'),
       maintainers: ['brylie'],
       botTimeoutMinutes: 30,
+      docs: NO_DOCS,
     },
     0,
   ),

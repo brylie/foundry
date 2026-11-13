@@ -30,7 +30,7 @@ If nothing appears above, use the most recent plan in this conversation. If ther
 - Every spec, decision record, and design document that covers the same behaviour, including ones the plan does not name. Search for the feature's terms.
 - The code it names, and the code its new work must fit: the closest existing example, the shared test helpers, and the tests that enumerate things.
 
-For a very large plan, delegate wide searches to a subagent and read the key files yourself. To review from several perspectives at once, spawn the Foundry reviewers in parallel with the stage `plan` (`foundry:product-owner`, `foundry:usability`, `foundry:accessibility`, `foundry:architecture`, `foundry:security`), and merge their findings into one review.
+For a very large plan, delegate wide searches to a subagent and read the key files yourself. To review from several perspectives at once, spawn the Foundry reviewers in parallel with the stage `plan` (`foundry:product-owner`, `foundry:usability`, `foundry:accessibility`, `foundry:architecture`, `foundry:security`, `foundry:documentation`), and merge their findings into one review.
 
 ## 2. Look for these problems
 

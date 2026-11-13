@@ -2,6 +2,7 @@ import { describe, expect, test } from 'claude-code/testing'
 
 import type { Batch, Verdict } from '../types'
 import {
+  NO_DOCS,
   appendLog,
   choices,
   currentRound,
@@ -25,6 +26,7 @@ const SETTINGS = {
   onlineReviewers: parseLogins('coderabbitai[bot],gitar-bot[bot]'),
   maintainers: ['brylie'],
   botTimeoutMinutes: 30,
+  docs: NO_DOCS,
 }
 
 function start(): Batch {
