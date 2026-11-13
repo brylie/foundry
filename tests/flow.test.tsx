@@ -138,7 +138,10 @@ function engine(on: On) {
   const hub = github()
   const prompts: string[] = []
   const ran: string[] = []
-  mock.clock(on)
+  /** How the next prompt submissions go: accepted, dropped (as after Stop), or held until released. */
+  const submit = { mode: 'accept' as 'accept' | 'drop' | 'hold', release: () => {} }
+  const gate: { pattern?: RegExp; open: () => void } = { open: () => {} }
+  const clock = mock.clock(on)
   on('ui.status', () => ({ value: undefined }))
   on('ui.toast', () => ({ value: undefined }))
   on('command.register', (_, e) => ({ value: { command: e.name } }))
@@ -147,13 +150,21 @@ function engine(on: On) {
   on('session.cwd', () => ({ value: '/repo' }))
   on('session.id', () => ({ value: 'session-1' }))
   on('session.repo', () => ({ value: { root: '/repo', name: 'r', remote: 'git@github.com:o/r.git', internal: false } }))
-  on('process.run', (_, e) => {
+  on('process.run', async (_, e) => {
+    // A `gh` call matching the gate's pattern waits until the test opens it, once.
+    const line = e.argv.slice(1).join(' ')
+    if (gate.pattern?.test(line)) {
+      gate.pattern = undefined
+      await new Promise<void>(resolve => (gate.open = resolve))
+    }
     const { stdout, stderr, exitCode } = hub.run(e.argv, e.init?.stdin)
 
     return { value: { exitCode, stdout, stderr, isStdoutTruncated: false, isStderrTruncated: false } }
   })
-  on('prompt.submit', (_, e) => {
+  on('prompt.submit', async (_, e) => {
     prompts.push(e.text)
+    if (submit.mode === 'drop') return { drop: 'the person pressed Stop' }
+    if (submit.mode === 'hold') await new Promise<void>(resolve => (submit.release = resolve))
 
     return { text: e.text }
   })
@@ -164,7 +175,7 @@ function engine(on: On) {
     return { result: {} }
   })
 
-  return { hub, prompts, ran }
+  return { hub, prompts, ran, submit, clock, gate }
 }
 
 async function approveAll($: Engine) {
@@ -389,6 +400,96 @@ test('with no foundry.yaml, the plugin settings apply and the signed-in account 
   expect(hub.state(12)?.onlineReviewers).toEqual(['coderabbitai'])
   expect(hub.state(12)?.maintainers).toEqual([WRITER])
   expect(String(started.result)).toContain(`Allowlist: act only on PR comments from coderabbitai, ${WRITER}.`)
+})
+
+/** Takes a fresh batch through both sign-offs to an open, green pull request #9. */
+async function toShip($: Engine) {
+  await $.session.start({ cwd: '/repo', surface: 'desktop', isInteractive: true })
+  await $.tool.call({ tool: 'mcp__foundry__batch_start', title: 'T', issues: [12] })
+  for (const stage of ['plan', 'build']) {
+    await approveAll($)
+    await $.tool.call({ tool: 'mcp__foundry__signoff_request', summary: stage })
+    await $.command.run({ command: 'foundry', args: 'approve', origin: { kind: 'composer' }, presentation: SHOWN })
+  }
+  await $.tool.call({ tool: 'mcp__foundry__pr_opened', pr: '9' })
+}
+
+const RED = {
+  commits: {
+    nodes: [
+      {
+        commit: {
+          committedDate: new Date(0).toISOString(),
+          statusCheckRollup: { contexts: { nodes: [{ __typename: 'CheckRun' as const, name: 'test', status: 'COMPLETED', conclusion: 'FAILURE' }] } },
+        },
+      },
+    ],
+  },
+}
+
+test('a dropped wake is sent again on the next tick, and never twice while one is pending', async ($, on) => {
+  const { hub, prompts, submit, clock } = engine(on)
+  await toShip($)
+  hub.setPr(RED)
+
+  // The timer reads the failure and tries to tell the agent; the prompt is dropped.
+  submit.mode = 'drop'
+  await clock.advance(60_000)
+  const tries = prompts.filter(p => p.includes('CI failed')).length
+  expect(tries).toBe(1)
+
+  // Next tick: held while the session is busy. Further ticks send nothing more.
+  submit.mode = 'hold'
+  void clock.advance(60_000)
+  await clock.settle()
+  void clock.advance(60_000)
+  await clock.settle()
+  expect(prompts.filter(p => p.includes('CI failed')).length).toBe(2)
+
+  // Accepted at last: nothing is sent again after that.
+  submit.mode = 'accept'
+  submit.release()
+  await clock.settle()
+  await clock.advance(60_000)
+  expect(prompts.filter(p => p.includes('CI failed')).length).toBe(2)
+})
+
+test("a send-back made while a poll's write is in flight lands after it, not under it", async ($, on) => {
+  const { hub, clock, gate } = engine(on)
+  await toShip($)
+  hub.setPr(RED)
+
+  // The poll reads the failure and starts writing it; GitHub holds that write.
+  gate.pattern = /-X PATCH .*issues\/comments\//
+  void clock.advance(60_000)
+  await clock.settle()
+
+  // The agent sends the work back meanwhile; it waits for the poll's write.
+  const back = $.tool.call({ tool: 'mcp__foundry__send_back', reason: 'ci-failure', summary: 'unit tests' })
+  await clock.settle()
+  gate.open()
+  expect((await back).deny).toBeUndefined()
+
+  expect(hub.state(12)?.stage).toBe('build')
+  expect(hub.state(12)?.rounds.ship).toBe(2)
+})
+
+test("a write whose comment landed but whose labels did not is finished, not flagged as tampering", async ($, on) => {
+  const { hub } = engine(on)
+  await $.session.start({ cwd: '/repo', surface: 'desktop', isInteractive: true })
+  await $.tool.call({ tool: 'mcp__foundry__batch_start', title: 'T', issues: [12] })
+  await approveAll($)
+  await $.tool.call({ tool: 'mcp__foundry__signoff_request', summary: 'plan' })
+
+  hub.failOnce(/-X POST repos\/o\/r\/issues\/12\/labels/)
+  const approved = await $.command.run({ command: 'foundry', args: 'approve', origin: { kind: 'composer' }, presentation: SHOWN })
+  expect(approved.text).toContain('Not saved to GitHub yet')
+  expect(hub.state(12)?.stage).toBe('build')
+  expect(hub.labels.get(12)).not.toContain('foundry:build')
+
+  await $.command.run({ command: 'foundry', args: 'sync', origin: { kind: 'composer' }, presentation: SHOWN })
+  expect(hub.state(12)?.waiting).toBeUndefined()
+  expect(hub.labels.get(12)).toEqual(['foundry', 'foundry:build'])
 })
 
 test('with no batch, nothing is guarded but merging, and the panel says so', async ($, on) => {

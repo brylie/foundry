@@ -55,6 +55,8 @@ describe('shell writes', () => {
     expect(shellWriteTargets("sed -i '' 's/a/b/' src/x.ts")).toEqual(['src/x.ts'])
     expect(shellWriteTargets('cp -r a b && rm -rf build && touch c')).toEqual(['b', 'build', 'c'])
     expect(shellWriteTargets('echo "a > b" && git status')).toEqual([])
+    expect(shellWriteTargets('printf x > "/repo/src/a.ts"')).toEqual(['/repo/src/a.ts'])
+    expect(shellWriteTargets("echo 'x > y' >> 'notes with space.md'")).toEqual(['notes with space.md'])
     expect(shellWriteTargets('sed -n 1,5p src/x.ts')).toEqual([])
   })
 
@@ -115,6 +117,14 @@ describe("the state only the mod writes", () => {
     expect(stateRefusal('gh api -X DELETE repos/o/r/issues/4/labels', [], [3])).toBeUndefined()
     expect(stateRefusal('gh api -X POST repos/o/r/issues/3/labels -f "labels[]=bug"', [], [3])).toBeUndefined()
     expect(stateRefusal('gh api -X DELETE repos/o/r/issues/3/labels/bug', [], [3])).toBeUndefined()
+    expect(stateRefusal('gh api -XDELETE repos/o/r/issues/3/labels', [], [3])).toContain("Foundry's labels")
+  })
+
+  test('a script that passes the method as list items is caught too', async () => {
+    const script = 'import subprocess\nsubprocess.run(\n    ["gh", "api", "-X", "DELETE", "repos/o/r/issues/3/labels"],\n    check=True,\n)\n'
+    expect(scriptRefusal('/repo/tools/clear.py', script, [], '/plugins/foundry', [3])).toContain("Foundry's labels")
+    expect(scriptRefusal('/repo/tools/clear.py', script.replace('"DELETE"', '"GET"'), [], '/plugins/foundry', [3])).toBeUndefined()
+    expect(scriptRefusal('/repo/tools/clear.py', script, [], '/plugins/foundry', [4])).toBeUndefined()
   })
 
   test('a script that would write them is refused, outside the plugin itself', async () => {

@@ -169,18 +169,41 @@ async function save($: EngineInterface, batch: Batch): Promise<Batch> {
 
 /** Runs a move on a batch and keeps what it changed, a refused move's escalation included. */
 async function apply($: EngineInterface, key: string, move: (batch: Batch) => Move): Promise<Move | undefined> {
-  const batch = await byKey($, key)
-  if (batch === undefined) return undefined
-  const result = move(batch)
-  if (result.batch === batch) return result
+  return exclusive(key, async () => {
+    const batch = await byKey($, key)
+    if (batch === undefined) return undefined
+    const result = move(batch)
+    if (result.batch === batch) return result
 
-  const before = batch.waiting
-  const saved = await save($, result.batch)
-  if (saved.waiting !== undefined && saved.waiting !== before) {
-    $.ui.toast(`Foundry: waiting on you: ${WAIT_LABEL[saved.waiting.kind]}`)
-  }
+    const before = batch.waiting
+    const saved = await save($, result.batch)
+    if (saved.waiting !== undefined && saved.waiting !== before) {
+      $.ui.toast(`Foundry: waiting on you: ${WAIT_LABEL[saved.waiting.kind]}`)
+    }
 
-  return { ...result, batch: saved }
+    return { ...result, batch: saved }
+  })
+}
+
+// Every change to a batch, from reading it through its GitHub write, runs one
+// at a time per batch: a poll's write can never land after a newer
+// send-back's, and two decisions never interleave. These live in the module,
+// so a reload starts them empty, with nothing in flight.
+const queues = new Map<string, Promise<unknown>>()
+
+function exclusive<T>(key: string, work: () => Promise<T>): Promise<T> {
+  const before = queues.get(key) ?? Promise.resolve()
+  const run = before.then(work, work)
+  const settled = run.then(
+    () => undefined,
+    () => undefined,
+  )
+  queues.set(key, settled)
+  void settled.then(() => {
+    if (queues.get(key) === settled) queues.delete(key)
+  })
+
+  return run
 }
 
 /** The log lines for the agent that this session has not passed on yet, by their `n`. */
@@ -219,11 +242,22 @@ async function takeNotes($: EngineInterface, batch: Batch | undefined): Promise<
  */
 async function deliver($: EngineInterface, batch: Batch | undefined): Promise<void> {
   if (batch === undefined) return
-  const { notes, last } = await pending($, batch)
-  if (notes.length === 0) return
-  const submitted = await $.prompt.submit({ text: `Foundry, "${batch.title}":\n${notes.join('\n')}` })
-  if (!('drop' in submitted && submitted.drop !== undefined)) await markDelivered($, batchKey(batch), last)
+  const key = batchKey(batch)
+  // One submission at a time: while one waits for the session to go idle,
+  // the next tick or press sends nothing, so the same notes are never queued twice.
+  if (delivering.has(key)) return
+  delivering.add(key)
+  try {
+    const { notes, last } = await pending($, batch)
+    if (notes.length === 0) return
+    const submitted = await $.prompt.submit({ text: `Foundry, "${batch.title}":\n${notes.join('\n')}` })
+    if (!('drop' in submitted && submitted.drop !== undefined)) await markDelivered($, key, last)
+  } finally {
+    delivering.delete(key)
+  }
 }
+
+const delivering = new Set<string>()
 
 function withNotes(text: string, notes: string[]): string {
   return notes.length === 0 ? text : `${text}\n\nFoundry news:\n${notes.map(n => `- ${n}`).join('\n')}`
@@ -273,8 +307,16 @@ async function sync($: EngineInterface): Promise<void> {
     const ours = local.find(b => batchKey(b) === key)
     const wrote = meta.written[key]
     const isMoved = ours?.commentId !== undefined && theirs.commentId !== ours.commentId && ours.owner === self
-    const isEdited = ours !== undefined && wrote !== undefined && theirs.rev <= ours.rev && fingerprint(theirs) !== wrote
-    if (ours !== undefined && (isEdited || isMoved)) {
+    // GitHub holds exactly this session's latest copy: a write whose comment landed and whose labels did not.
+    const isOursPending = ours !== undefined && meta.errors[key] !== undefined && fingerprint(theirs) === fingerprint(ours)
+    const isEdited =
+      ours !== undefined && wrote !== undefined && theirs.rev <= ours.rev && fingerprint(theirs) !== wrote && !isOursPending
+    if (ours !== undefined && isOursPending) {
+      // Finish that write: the comment is there, so it is rewritten in place and the labels set again.
+      const finished = { ...ours, commentId: theirs.commentId }
+      merged.push(finished)
+      retry.push(finished)
+    } else if (ours !== undefined && (isEdited || isMoved)) {
       restore.push(ours)
       merged.push(ours)
     } else if (ours !== undefined && ours.rev > theirs.rev) {
@@ -296,7 +338,19 @@ async function sync($: EngineInterface): Promise<void> {
     if (ours.repo !== repo || !isActive(ours) || meta.mine === key) merged.push(ours)
   }
 
-  await update($, batchesAtom, () => merged)
+  // A change made while GitHub was being read stands: per batch, the newer revision is kept, and a
+  // batch that appeared meanwhile (a batch_start) is kept too.
+  const seen = new Set(local.map(batchKey))
+  await update($, batchesAtom, current => {
+    const result = merged.map(b => {
+      const now = current.find(c => batchKey(c) === batchKey(b))
+
+      return now !== undefined && now.rev > b.rev ? now : b
+    })
+    const added = current.filter(c => !seen.has(batchKey(c)) && !result.some(b => batchKey(b) === batchKey(c)))
+
+    return [...result, ...added]
+  })
   await update($, metaAtom, m => {
     const errors = Object.fromEntries(Object.entries(m.errors).filter(([key]) => !superseded.includes(key)))
     const taken = m.mine !== null && merged.some(b => batchKey(b) === m.mine && b.owner !== self)
@@ -315,10 +369,23 @@ async function sync($: EngineInterface): Promise<void> {
             },
           }
         : batch
-    await save($, appendLog(flagged, now, 'Restored the state comment after an outside edit.'))
+    await rewrite($, batch, appendLog(flagged, now, 'Restored the state comment after an outside edit.'))
   }
-  for (const batch of retry) await save($, batch)
+  for (const batch of retry) await rewrite($, batch, batch)
   await show($)
+}
+
+/**
+ * Writes `next` in the batch's turn, unless the batch moved on since `seen`
+ * was read: then the newer change has written already, and this write is
+ * stale.
+ */
+async function rewrite($: EngineInterface, seen: Batch, next: Batch): Promise<void> {
+  await exclusive(batchKey(seen), async () => {
+    const current = await byKey($, batchKey(seen))
+    if (current !== undefined && current.rev > seen.rev) return
+    await save($, next)
+  })
 }
 
 /** The batch has not moved since `before` was read: same revision, epoch, stage and owner. */
@@ -373,11 +440,15 @@ async function pollShip($: EngineInterface): Promise<void> {
 
     return
   }
-  // Checked again just before the write: nothing that moved the batch may be overwritten.
-  if (!isUnchanged(batch, await byKey($, key))) return
-  const before = batch.waiting?.kind
-  const saved = await save($, next)
-  if (saved.waiting !== undefined && saved.waiting.kind !== before) $.ui.toast(`Foundry: waiting on you: ${WAIT_LABEL[saved.waiting.kind]}`)
+  // The check and the write happen in the batch's turn, so a send-back or a
+  // decision either lands first (and this reading is dropped) or waits until
+  // this write is done (and builds on it).
+  await exclusive(key, async () => {
+    if (!isUnchanged(batch, await byKey($, key))) return
+    const before = batch.waiting?.kind
+    const saved = await save($, next)
+    if (saved.waiting !== undefined && saved.waiting.kind !== before) $.ui.toast(`Foundry: waiting on you: ${WAIT_LABEL[saved.waiting.kind]}`)
+  })
 }
 
 function statusText(batch: Batch | undefined): string | undefined {
@@ -651,7 +722,7 @@ export const register: Register = (on, options) => {
       // What happened before this session took the batch is in the result below, not news to deliver.
       delivered: { ...meta.delivered, [key]: batch.log.at(-1)?.n ?? 0 },
     }))
-    const saved = await save($, batch)
+    const saved = await exclusive(key, () => save($, batch))
     void openPane($)
     const error = (await read($, metaAtom)).errors[key]
     const next =

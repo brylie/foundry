@@ -138,7 +138,7 @@ function isShip(v: unknown): boolean {
     isNumber(v['headSeenAt']) &&
     isOneOf(LIGHTS)(v['ci']) &&
     isListOf(v['checks'], c => isObject(c) && isString(c['name']) && isOneOf(LIGHTS)(c['light'])) &&
-    isListOf(v['bots'], b => isObject(b) && isString(b['login']) && isOneOf(BOT_LIGHTS)(b['light'])) &&
+    isListOf(v['bots'], b => isObject(b) && isString(b['login']) && isOneOf(BOT_LIGHTS)(b['light']) && isOptional(b['detail'], isString)) &&
     isInt(v['openThreads']) &&
     typeof v['isMerged'] === 'boolean' &&
     isNumber(v['checkedAt']) &&

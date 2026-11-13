@@ -139,6 +139,23 @@ describe('review findings', () => {
     const wrongStage = renderState({ ...start(), stage: 'shipping' as never })
     expect(parseState(wrongStage)).toBeUndefined()
     expect(isBatch(start())).toBe(true)
+
+    const ship = {
+      pr: 9,
+      url: 'u',
+      head: 'h',
+      headSeenAt: 0,
+      ci: 'pass',
+      checks: [],
+      bots: [{ login: 'coderabbitai', light: 'changes', detail: '1 thread' }],
+      openThreads: 0,
+      isMerged: false,
+      checkedAt: 0,
+      dismissed: [],
+      outsiders: [],
+    }
+    expect(isBatch({ ...start(), stage: 'ship', ship })).toBe(true)
+    expect(isBatch({ ...start(), stage: 'ship', ship: { ...ship, bots: [{ login: 'coderabbitai', light: 'changes', detail: 123 }] } })).toBe(false)
   })
 })
 

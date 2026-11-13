@@ -209,7 +209,7 @@ function isWriting(command: string): boolean {
       if ((noun === 'issue' || noun === 'pr') && ['edit', 'comment', 'close', 'reopen', 'delete'].includes(verb)) return true
       if (noun === 'api') {
         const isWrite = rest.some((t, j) => /^(-X|--method)$/.test(t) && !/^GET$/i.test(rest[j + 1] ?? '')) ||
-          rest.some(t => /^(-f|-F|--field|--raw-field|--input)$/.test(t) || /^--method=(?!GET)/i.test(t))
+          rest.some(t => /^(-f|-F|--field|--raw-field|--input)$/.test(t) || /^(--method=|-X)(?!GET\b)\w+/i.test(t))
         if (isWrite || tokens.some(t => /graphql/.test(t))) return true
       }
     }
@@ -226,7 +226,10 @@ function isWriting(command: string): boolean {
 
 // A whole issue's labels, replaced (PUT) or cleared (DELETE): that drops Foundry's labels without naming them.
 const BULK_LABELS = /issues\/(\d+)\/labels(?![/\w%])/gi
-const REPLACING = /(?:^|\s)(?:-X\s*|--method[=\s]+|--request[=\s]+)['"]?(?:PUT|DELETE)\b|\b(?:requests|axios|http)\.(?:put|delete)\b|method\s*[:=]\s*['"](?:PUT|DELETE)['"]/i
+// The method as a shell flag (`-X DELETE`, `-XPUT`, `--method=PUT`), as list items in a script
+// (`"-X", "DELETE"`), or as a client call or option (`requests.put`, `method: 'DELETE'`).
+const REPLACING =
+  /(?:^|[^\w-])(?:-X|--method|--request)['"]?\s*[,=]?\s*['"]?(?:PUT|DELETE)\b|\b(?:requests|axios|http)\.(?:put|delete)\b|method\s*[:=]\s*['"](?:PUT|DELETE)['"]/i
 
 function protectedThing(text: string, commentIds: number[], tracked: number[]): string | undefined {
   for (const { pattern, what } of PROTECTED) if (pattern.test(text)) return what
@@ -275,9 +278,11 @@ export function scriptRefusal(
 // Files a shell command writes, best effort, so the stages that hold edits
 // hold them from Bash too.
 
-const QUOTED = /'[^']*'|"(?:[^"\\]|\\.)*"/g
-// `> file`, `>> file`, `1> file`, `&> file`; never `2>&1`.
-const REDIRECT = /(?:^|[^<>&\d])(?:\d|&)?>>?(?!&)\s*([^\s;&|<>()]+)/g
+const QUOTED = /'([^']*)'|"((?:[^"\\]|\\.)*)"/g
+// `> file`, `>> file`, `1> file`, `&> file`, the file quoted or not; never `2>&1`.
+// Quoted text is set aside as numbered placeholders first, so a `>` inside a
+// string is no redirection while a quoted target still is one.
+const REDIRECT = /(?:^|[^<>&\d])(?:\d|&)?>>?(?!&)\s*(\u0000\d+\u0000|[^\s;&|<>()\u0000]+)/g
 const WRITES_ARGS = new Set(['tee', 'touch', 'rm', 'rmdir', 'truncate', 'mkdir', 'unlink'])
 const WRITES_LAST = new Set(['cp', 'mv', 'install', 'ln', 'rsync'])
 
@@ -289,8 +294,17 @@ const WRITES_LAST = new Set(['cp', 'mv', 'install', 'ln', 'rsync'])
  */
 export function shellWriteTargets(command: string): string[] {
   const targets: string[] = []
-  const bare = command.replace(QUOTED, ' ')
-  for (const match of bare.matchAll(REDIRECT)) if (match[1]) targets.push(match[1])
+  const quoted: string[] = []
+  const bare = command.replace(QUOTED, (_, single?: string, double?: string) => {
+    quoted.push(single ?? double ?? '')
+
+    return `\u0000${quoted.length - 1}\u0000`
+  })
+  for (const match of bare.matchAll(REDIRECT)) {
+    const target = match[1] ?? ''
+    const placeholder = /^\u0000(\d+)\u0000$/.exec(target)
+    targets.push(placeholder ? (quoted[Number(placeholder[1])] ?? '') : target)
+  }
 
   for (const tokens of segments(command)) {
     const at = program(tokens)

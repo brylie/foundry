@@ -39,7 +39,7 @@ Classify each candidate as one of: **follow-up**, **bug**, **manual check** (onl
 
 A good retro files fewer, better issues. Drop or redirect candidates that:
 
-- **are already tracked.** Search open issues (`gh issue list --state open --search "<keywords>"`; `scripts/repo_context.py` also lists open titles, up to 500, and warns when it stops there). If an existing issue covers it, add a comment there instead of filing a duplicate. Mention it in your report.
+- **are already tracked.** Search open issues (`gh issue list --state open --search "<keywords>"`; `scripts/repo_context.py` also lists open titles, up to 500, and warns when it stops there). If an existing issue covers it, draft a comment for that issue instead of filing a duplicate. The comment goes into the plan in step 8 and is posted only after the user approves it. Mention it in your report.
 - **are trivial.** Fix them now, or leave them out.
 - **only the user can do**, such as changing an account or app setting. Mention them in the report; an issue nobody can act on is noise.
 - **are manual checks.** Never file one as its own issue. A check that code or a test could do is a test gap, so file that instead. What only a person can do goes on the milestone's Manual QA issue (step 7). *Why:* one issue per check makes the backlog grow fast and hides the work that code can finish.
@@ -166,4 +166,6 @@ End with the filed issues as a table of links, priority, size, and milestone. Th
 
 ## Dry runs
 
-If the user asks for a dry run, a preview, or "just show me", stop after step 8's table. Do not file anything. Write the plan to `plan.json` if a file is useful.
+If the user asks for a dry run, a preview, or "just show me", stop after step 8's table. Make no GitHub writes at all: no issues, no comments, no edits to the Manual QA issue, no project changes. Reading is fine. Write the plan to `plan.json` if a file is useful.
+
+Before step 8's approval, a full run makes no writes either: every comment, edit and new issue waits in the plan until the user approves it.
