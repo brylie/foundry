@@ -80,9 +80,28 @@ export async function currentLogin($: EngineInterface): Promise<string> {
 }
 
 /** Writes the batch's state comment and labels. Returns the batch with its comment id. */
+/**
+ * A write whose state comment landed and whose labels did not. It carries
+ * the comment's id, so the retry rewrites that comment instead of posting a
+ * second one.
+ */
+export class PartialWrite extends Error {
+  constructor(
+    message: string,
+    readonly commentId: number,
+  ) {
+    super(message)
+  }
+}
+
 export async function writeBatch($: EngineInterface, batch: Batch): Promise<Batch> {
   const body = JSON.stringify({ body: renderState(batch) })
   let commentId = batch.commentId
+  if (commentId === undefined) {
+    // A first write that lost its id (a failure after the comment landed) finds its comment again.
+    const found = await readStateComment($, batch.repo, batch.lead, await currentLogin($))
+    commentId = found?.commentId
+  }
   if (commentId === undefined) {
     const made = await ghJson<{ id: number }>($, ['api', '-X', 'POST', `repos/${batch.repo}/issues/${batch.lead}/comments`, '--input', '-'], body)
     commentId = made.id
@@ -101,7 +120,11 @@ export async function writeBatch($: EngineInterface, batch: Batch): Promise<Batc
 
   const labels = labelsFor(batch)
   const items = batch.ship ? [...batch.issues, batch.ship.pr] : batch.issues
-  for (const number of new Set(items)) await setLabels($, batch.repo, number, labels)
+  try {
+    for (const number of new Set(items)) await setLabels($, batch.repo, number, labels)
+  } catch (error) {
+    throw new PartialWrite(error instanceof Error ? error.message : String(error), commentId)
+  }
 
   return { ...batch, commentId }
 }

@@ -214,7 +214,18 @@ function isWriting(command: string): boolean {
       }
     }
     if (name === 'curl' || name === 'wget' || name === 'http' || name === 'https' || name === 'xh') {
-      if (rest.some(t => /^(-X|--request|-d|--data.*|-F|--form|--json|-T|--upload-file|--post-data|--method)$/.test(t) || /^--(data|json|form|request)=/.test(t))) return true
+      if (
+        rest.some(
+          t =>
+            /^(-X|--request|-d|--data.*|-F|--form|--json|-T|--upload-file|--post-data|--method)$/.test(t) ||
+            /^--(data|json|form|request)=/.test(t) ||
+            // The method attached to its flag (`-XDELETE`), and a body attached to `-d` (`-d@file`).
+            /^-X(?!GET\b)\w+/i.test(t) ||
+            /^-d./.test(t),
+        )
+      ) {
+        return true
+      }
     }
     if (/^(python[0-9.]*|node|deno|bun|ruby|perl|php|bash|sh|zsh|osascript)$/.test(name)) {
       if (rest.some(t => /^(-c|-e|--eval|-)$/.test(t)) || rest.length === 0) return true

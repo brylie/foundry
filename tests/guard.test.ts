@@ -118,6 +118,9 @@ describe("the state only the mod writes", () => {
     expect(stateRefusal('gh api -X POST repos/o/r/issues/3/labels -f "labels[]=bug"', [], [3])).toBeUndefined()
     expect(stateRefusal('gh api -X DELETE repos/o/r/issues/3/labels/bug', [], [3])).toBeUndefined()
     expect(stateRefusal('gh api -XDELETE repos/o/r/issues/3/labels', [], [3])).toContain("Foundry's labels")
+    expect(stateRefusal('curl -XDELETE https://api.github.com/repos/o/r/issues/3/labels', [], [3])).toContain("Foundry's labels")
+    expect(stateRefusal('curl -XPUT -d@labels.json https://api.github.com/repos/o/r/issues/3/labels', [], [3])).toContain("Foundry's labels")
+    expect(stateRefusal('curl -XGET https://api.github.com/repos/o/r/issues/3/labels', [], [3])).toBeUndefined()
   })
 
   test('a script that passes the method as list items is caught too', async () => {

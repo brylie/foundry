@@ -492,6 +492,23 @@ test("a write whose comment landed but whose labels did not is finished, not fla
   expect(hub.labels.get(12)).toEqual(['foundry', 'foundry:build'])
 })
 
+test('a first write whose labels fail keeps its comment, and the retry posts no second one', async ($, on) => {
+  const { hub } = engine(on)
+  await $.session.start({ cwd: '/repo', surface: 'desktop', isInteractive: true })
+
+  hub.failOnce(/-X POST repos\/o\/r\/issues\/12\/labels/)
+  const started = await $.tool.call({ tool: 'mcp__foundry__batch_start', title: 'T', issues: [12] })
+  expect(String(started.result)).toContain('Could not write the state to GitHub yet')
+  expect(hub.comments.get(12)).toHaveLength(1)
+  expect(hub.labels.get(12) ?? []).toEqual([])
+
+  // Without its label the issue is not listed, so only this session knows the batch: it finishes the write.
+  await $.command.run({ command: 'foundry', args: 'sync', origin: { kind: 'composer' }, presentation: SHOWN })
+  expect(hub.comments.get(12)).toHaveLength(1)
+  expect(hub.labels.get(12)).toEqual(['foundry', 'foundry:plan'])
+  expect(hub.state(12)?.waiting).toBeUndefined()
+})
+
 test('with no batch, nothing is guarded but merging, and the panel says so', async ($, on) => {
   const { ran } = engine(on)
   await $.session.start({ cwd: '/repo', surface: 'desktop', isInteractive: true })

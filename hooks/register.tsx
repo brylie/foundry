@@ -8,7 +8,7 @@ import type { EngineInterface, Register } from 'claude-code'
 
 import type { Batch, Light, Meta, Verdict } from '../types'
 import { CONFIG_FILE, mergeSettings, readConfig } from './config'
-import { currentLogin, currentRepo, ensureLabels, fetchPr, loadBatches, readRepoConfig, writeBatch } from './github'
+import { PartialWrite, currentLogin, currentRepo, ensureLabels, fetchPr, loadBatches, readRepoConfig, writeBatch } from './github'
 import { absoluteTarget, bashActions, editRefusal, refusal, scriptRefusal, shellWriteTargets, stateRefusal } from './guard'
 import {
   appendLog,
@@ -160,6 +160,12 @@ async function save($: EngineInterface, batch: Batch): Promise<Batch> {
     })
   } catch (error) {
     const text = error instanceof Error ? error.message : String(error)
+    // The comment landed even though the labels did not: keep its id, so the retry rewrites it in place.
+    if (error instanceof PartialWrite) {
+      const kept: Batch = { ...saved, commentId: error.commentId }
+      saved = kept
+      await update($, batchesAtom, list => list.map(b => (batchKey(b) === key ? kept : b)))
+    }
     await update($, metaAtom, meta => ({ ...meta, errors: { ...meta.errors, [key]: text.slice(0, 300) } }))
   }
   await show($)
