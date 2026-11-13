@@ -179,8 +179,9 @@ export function editRefusal(batch: Batch, root: string, path: string): string | 
 }
 
 // ---------------------------------------------------------------------------
-// The state only the mod writes: the `foundry` labels, the state comment,
-// and whether a review thread is resolved.
+// The state only the mod writes: the `foundry` labels and the state comment.
+// Review threads are the agent's to reply to and resolve; the ship gate
+// keeps an online reviewer's resolved thread blocking until it re-reviews.
 
 export const STATE_MARKER = '<!-- foundry:state -->'
 
@@ -192,7 +193,6 @@ const PROTECTED: { pattern: RegExp; what: string }[] = [
   { pattern: /\/labels\/foundry\b/i, what: "Foundry's labels" },
   { pattern: /\blabels?(?:\[\])?["']?\s*[:=]\s*\[?[^\]\n]{0,80}\bfoundry\b/i, what: "Foundry's labels" },
   { pattern: /\blabel\s+(?:create|edit|delete|clone)\s+['"]?foundry\b/i, what: "Foundry's labels" },
-  { pattern: /\b(un)?resolveReviewThread\b|\bresolve[-_ ]?(review[-_ ]?)?threads?\b/i, what: 'review threads' },
 ]
 
 /** Whether a command writes somewhere: a gh write, curl with a body or method, or inline code. */

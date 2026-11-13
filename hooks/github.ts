@@ -154,7 +154,7 @@ const PR_QUERY = `query($owner: String!, $name: String!, $number: Int!) {
         }
       } } } } }
       reviews(last: 100) { nodes { author { login } state submittedAt commit { oid } } }
-      reviewThreads(first: 100) { pageInfo { hasNextPage } nodes { isResolved comments(first: 1) { nodes { author { login } } } } }
+      reviewThreads(first: 100) { pageInfo { hasNextPage } nodes { isResolved comments(first: 1) { nodes { author { login } originalCommit { oid } } } } }
       comments(last: 100) { nodes { author { login } body updatedAt } }
     }
   }

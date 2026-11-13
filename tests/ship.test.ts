@@ -36,7 +36,7 @@ const prior: Ship = {
 type Parts = {
   checks?: { name: string; conclusion: string | null }[]
   reviews?: { login: string; state: string; oid?: string }[]
-  threads?: { login: string; isResolved: boolean }[]
+  threads?: { login: string; isResolved: boolean; oid?: string }[]
   comments?: { login: string; body: string; updatedAt: string }[]
   state?: PrData['state']
 }
@@ -67,7 +67,12 @@ function pr(parts: Parts): PrData {
       ],
     },
     reviews: { nodes: (parts.reviews ?? []).map(r => ({ author: { login: r.login }, state: r.state, submittedAt: PUSHED, commit: { oid: r.oid ?? HEAD } })) },
-    reviewThreads: { nodes: (parts.threads ?? []).map(t => ({ isResolved: t.isResolved, comments: { nodes: [{ author: { login: t.login } }] } })) },
+    reviewThreads: {
+      nodes: (parts.threads ?? []).map(t => ({
+        isResolved: t.isResolved,
+        comments: { nodes: [{ author: { login: t.login }, originalCommit: { oid: t.oid ?? 'old0000' } }] },
+      })),
+    },
     comments: { nodes: (parts.comments ?? []).map(c => ({ author: { login: c.login }, body: c.body, updatedAt: c.updatedAt })) },
   }
 }
@@ -127,7 +132,7 @@ describe('online reviewers', () => {
     expect(threads.ship.openThreads).toBe(1)
     expect(threads.ship.bots[0]?.light).toBe('changes')
     expect(threads.waiting).toBeUndefined()
-    expect(threads.notice?.text).toContain('Do not resolve threads yourself')
+    expect(threads.notice?.text).toContain('resolve it once the fix is pushed')
 
     // A review under the maintainer's own account is feedback: its change request blocks, and nothing of it signs off.
     const mine = readShip(batch, prior, pr({ checks: GREEN, reviews: [...both, { login: 'brylie', state: 'CHANGES_REQUESTED' }] }), T0)
@@ -136,6 +141,34 @@ describe('online reviewers', () => {
 
     const resolved = readShip(batch, prior, pr({ checks: GREEN, reviews: both, threads: [{ login: 'coderabbitai', isResolved: true }] }), T0)
     expect(resolved.waiting?.kind).toBe('merge')
+  })
+
+  test("a bot's resolved thread clears only once the bot re-reviews a newer commit", async () => {
+    const gitar = { login: 'gitar-bot', state: 'COMMENTED' }
+    const rabbit = { login: 'coderabbitai', state: 'COMMENTED' }
+
+    // Resolved with no new commit: the thread was raised on the head itself.
+    const noFix = readShip(batch, prior, pr({ checks: GREEN, reviews: [gitar, rabbit], threads: [{ login: 'coderabbitai', isResolved: true, oid: HEAD }] }), T0)
+    expect(noFix.ship.openThreads).toBe(1)
+    expect(noFix.waiting).toBeUndefined()
+
+    // A fix is pushed, but the bot has not reviewed it yet.
+    const unseen = readShip(
+      batch,
+      prior,
+      pr({ checks: GREEN, reviews: [gitar, { ...rabbit, oid: 'old0000' }], threads: [{ login: 'coderabbitai', isResolved: true }] }),
+      T0,
+    )
+    expect(unseen.ship.openThreads).toBe(1)
+
+    // The bot re-reviewed the new head: cleared.
+    const seen = readShip(batch, prior, pr({ checks: GREEN, reviews: [gitar, rabbit], threads: [{ login: 'coderabbitai', isResolved: true }] }), T0)
+    expect(seen.ship.openThreads).toBe(0)
+    expect(seen.waiting?.kind).toBe('merge')
+
+    // A thread a person raised clears when it is resolved.
+    const person = readShip(batch, prior, pr({ checks: GREEN, reviews: [gitar, rabbit], threads: [{ login: 'brylie', isResolved: true, oid: HEAD }] }), T0)
+    expect(person.ship.openThreads).toBe(0)
   })
 
   test('a later plain comment does not clear a change request; a dismissed review is not a review', async () => {

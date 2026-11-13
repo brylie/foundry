@@ -234,7 +234,7 @@ test('a batch moves through every stage, its state in GitHub, gated by the perso
   expect(hub.labels.get(12)).toEqual([])
 })
 
-test("the agent cannot sign off, edit Foundry's state, or resolve threads", async ($, on) => {
+test("the agent cannot sign off or edit Foundry's state, but may resolve review threads", async ($, on) => {
   const { hub } = engine(on)
   await $.session.start({ cwd: '/repo', surface: 'desktop', isInteractive: true })
   await $.tool.call({ tool: 'mcp__foundry__batch_start', title: 'T', issues: [12] })
@@ -247,7 +247,9 @@ test("the agent cannot sign off, edit Foundry's state, or resolve threads", asyn
   expect((await $.tool.call({ tool: 'Bash', command: 'gh issue edit 12 --remove-label foundry:waiting' })).deny).toContain('only the Foundry mod')
   const commentId = hub.comments.get(12)?.[0]?.id
   expect((await $.tool.call({ tool: 'Bash', command: `gh api -X PATCH repos/o/r/issues/comments/${commentId} -f body=x` })).deny).toContain('state comment')
-  expect((await $.tool.call({ tool: 'Write', file_path: '/repo/tools/x.sh', content: 'gh api graphql -f query="mutation{resolveReviewThread}"' })).deny).toContain('only the Foundry mod')
+  expect((await $.tool.call({ tool: 'Write', file_path: '/tmp/x.sh', content: 'gh issue edit 12 --remove-label foundry:plan' })).deny).toContain('only the Foundry mod')
+  const resolve = 'gh api graphql -f query="mutation { resolveReviewThread(input: {threadId: \\"t\\"}) { thread { id } } }"'
+  expect((await $.tool.call({ tool: 'Bash', command: resolve })).deny).toBeUndefined()
   expect(hub.state(12)?.waiting?.kind).toBe('signoff')
 })
 

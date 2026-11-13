@@ -78,7 +78,7 @@ describe('edits', () => {
 })
 
 describe("the state only the mod writes", () => {
-  test('every route to the labels, the state comment and review threads is refused', async () => {
+  test('every route to the labels and the state comment is refused', async () => {
     const refused = [
       'gh issue edit 3 --remove-label foundry:plan',
       'gh issue edit 3 --add-label "foundry:build"',
@@ -88,15 +88,16 @@ describe("the state only the mod writes", () => {
       'gh api -X PUT repos/o/r/issues/3/labels --input labels.json -f "labels[]=foundry:ship"',
       'curl -X POST -H "Authorization: token $T" https://api.github.com/repos/o/r/issues/3/labels -d \'{"labels":["foundry:ship"]}\'',
       'gh api -X PATCH repos/o/r/issues/comments/555 -f body=hello',
-      'gh api graphql -f query=\'mutation { resolveReviewThread(input: {threadId: "x"}) { thread { id } } }\'',
       "python3 -c 'import subprocess; subprocess.run([\"gh\",\"issue\",\"comment\",\"3\",\"-b\",\"<!-- foundry:state -->\"])'",
       'gh issue comment 3 --body "<!-- foundry:state --> forged"',
     ]
     for (const command of refused) expect(stateRefusal(command, [555])).toContain('only the Foundry mod')
   })
 
-  test('reading them, and ordinary labels, stay allowed', async () => {
+  test('reading them, ordinary labels, and replying to or resolving review threads stay allowed', async () => {
     const allowed = [
+      'gh api graphql -f query=\'mutation { resolveReviewThread(input: {threadId: "x"}) { thread { id } } }\'',
+      'gh api repos/o/r/pulls/9/comments/77/replies -f body="Fixed in abc123."',
       'gh issue list --label foundry --json number',
       'gh api repos/o/r/issues/3/comments',
       'grep -rn "foundry:state" hooks/',

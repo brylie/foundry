@@ -13,7 +13,10 @@ export type PrData = {
   headRefOid: string
   commits: { nodes: { commit: { committedDate: string; statusCheckRollup: Rollup | null } }[] }
   reviews: { nodes: { author: Actor; state: string; submittedAt: string; commit: { oid: string } | null }[] }
-  reviewThreads: { pageInfo?: PageInfo; nodes: { isResolved: boolean; comments: { nodes: { author: Actor }[] } }[] }
+  reviewThreads: {
+    pageInfo?: PageInfo
+    nodes: { isResolved: boolean; comments: { nodes: { author: Actor; originalCommit?: { oid: string } | null }[] } }[]
+  }
   comments: { nodes: { author: Actor; body: string; updatedAt: string }[] }
 }
 
@@ -109,7 +112,19 @@ export function readShip(batch: Batch, prior: Ship, pr: PrData, now: number): Sh
   }
   const changesBy = [...opinion].filter(([, state]) => state === 'CHANGES_REQUESTED').map(([login]) => login)
 
-  const openThreads = pr.reviewThreads.nodes.filter(t => !t.isResolved)
+  // A thread blocks while it is open. Anyone may resolve a thread, the agent
+  // included, so an online reviewer's resolved thread still blocks until that
+  // reviewer has reviewed the head commit and the head is newer than the
+  // commit the thread was raised on: the fix has been pushed and re-reviewed.
+  // A resolved thread someone else raised (the maintainer, say) is cleared.
+  const openThreads = pr.reviewThreads.nodes.filter(t => {
+    if (!t.isResolved) return true
+    const first = t.comments.nodes[0]
+    const login = first?.author ? loginKey(first.author.login) : ''
+    if (!batch.onlineReviewers.includes(login)) return false
+
+    return first?.originalCommit?.oid === head || !reviewedBy.has(login)
+  })
   const threadsBy = new Map<string, number>()
   for (const thread of openThreads) {
     const author = thread.comments.nodes[0]?.author
@@ -122,7 +137,7 @@ export function readShip(batch: Batch, prior: Ship, pr: PrData, now: number): Sh
     if (prior.dismissed.includes(`${login}@${head}`)) return { login, light: 'dismissed' }
     if (changesBy.includes(login)) return { login, light: 'changes', detail: 'requested changes' }
     const threads = threadsBy.get(login) ?? 0
-    if (threads > 0) return { login, light: 'changes', detail: `${threads} open thread${threads === 1 ? '' : 's'}` }
+    if (threads > 0) return { login, light: 'changes', detail: `${threads} thread${threads === 1 ? '' : 's'} open or awaiting re-review` }
     if (reviewedBy.has(login)) return { login, light: 'reviewed' }
 
     const comment = [...pr.comments.nodes].reverse().find(c => c.author && loginKey(c.author.login) === login)
@@ -186,7 +201,7 @@ export function readShip(batch: Batch, prior: Ship, pr: PrData, now: number): Sh
     const who = [...new Set([...changesBy, ...threadsBy.keys()])]
     notice = {
       key: `changes@${head}:${openThreads.length}:${changesBy.join(',')}`,
-      text: `Changes were requested on ${short} (${who.join(', ')}; ${openThreads.length} open threads). Call mcp__foundry__send_back with reason "changes-requested" and fix them in the build loop. Do not resolve threads yourself.`,
+      text: `Changes were requested on ${short} (${who.join(', ')}; ${openThreads.length} threads open or awaiting re-review). Call mcp__foundry__send_back with reason "changes-requested" and fix them in the build loop. Reply in each thread with what you changed and resolve it once the fix is pushed; an online reviewer's thread counts as cleared only after it re-reviews the new commit.`,
     }
   } else if (isGreen) {
     notice = { key: `green@${head}`, text: `The ship gates are green on ${short}. Tell the person the pull request is ready to merge; the merge is theirs.` }

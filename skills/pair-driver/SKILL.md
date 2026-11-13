@@ -62,7 +62,7 @@ When the navigator approves the plan, record its verdict. Then spawn the five re
 
 - Once the build sign-off passes: push and open a PR that closes the issue. Follow the project's PR conventions. The description covers the user's task, what changed, the decisions to review, deferrals and the check results.
 - Call `mcp__foundry__pr_opened` with the PR link, and send the navigator the link and the head commit.
-- The mod watches CI and the online reviewers, and tells you what needs doing. For a flaky test, rerun it (no round). For a real CI failure or a change request, call `mcp__foundry__send_back` and fix it in the build loop. Reply in a bot's thread with reasons where a comment is wrong, but never resolve a thread yourself. Don't forward bot comments to the navigator.
+- The mod watches CI and the online reviewers, and tells you what needs doing. For a flaky test, rerun it (no round). For a real CI failure or a change request, call `mcp__foundry__send_back` and fix it in the build loop. Reply in each bot thread with what you changed, or why a comment is wrong, and resolve it once the fix is pushed. A bot's resolved thread still blocks the ship gate until the bot re-reviews the new commit. Don't forward bot comments to the navigator.
 - The user merges. After the merge, tell the navigator you're idle and ready for the next brief.
 
 ## Messages from the navigator
