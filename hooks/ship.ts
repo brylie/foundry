@@ -101,12 +101,16 @@ export function readShip(batch: Batch, prior: Ship, pr: PrData, now: number): Sh
     return false
   }
 
+  // An opinion stands across commits, as on GitHub: a change request on an older commit still
+  // holds after a push, until that reviewer approves or it is dismissed. Reviewing the head is
+  // tracked apart, for the threads below.
   const reviewedBy = new Set<string>()
   const opinion = new Map<string, string>()
   for (const review of pr.reviews.nodes) {
-    if (!isTrusted(review.author) || review.commit?.oid !== head || !review.author) continue
+    if (!isTrusted(review.author) || !review.author) continue
     const login = loginKey(review.author.login)
-    if (review.state === 'APPROVED' || review.state === 'COMMENTED' || review.state === 'CHANGES_REQUESTED') reviewedBy.add(login)
+    const isOnHead = review.commit?.oid === head
+    if (isOnHead && (review.state === 'APPROVED' || review.state === 'COMMENTED' || review.state === 'CHANGES_REQUESTED')) reviewedBy.add(login)
     if (review.state === 'APPROVED' || review.state === 'CHANGES_REQUESTED') opinion.set(login, review.state)
     if (review.state === 'DISMISSED') opinion.delete(login)
   }
