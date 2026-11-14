@@ -62,6 +62,22 @@ claude plugin install foundry --marketplace brylie/foundry
 
 In the Claude desktop app, click **+** next to the prompt box, choose **Plugins**, add the marketplace `brylie/foundry`, then add Foundry.
 
+### Upgrade
+
+Fetch the latest Foundry, then update the plugin:
+
+```bash
+claude plugin marketplace update foundry
+```
+
+```bash
+claude plugin update foundry@foundry
+```
+
+Restart Claude Code, or start a new session, to load the new version. `claude plugin list` shows the version you have.
+
+Batches already running carry on: Foundry reads the state an earlier version wrote, keeping each batch's stage, reviews and any decision waiting on you. Before you upgrade, read the release's **Changed** and **Upgrading** notes in the [changelog](CHANGELOG.md). For 0.3.0, for example, remove `bot_timeout_minutes` from your `foundry.yaml`, since Foundry no longer reads it.
+
 ### Run your first batch
 
 Open Claude Code in your repository, then see which issues Foundry would pick, without changing anything:
