@@ -541,6 +541,30 @@ test("a sync that reads this session's own write in flight finds no outside edit
   expect(hub.state(12)?.log.some(e => e.text.includes('outside edit'))).toBe(false)
 })
 
+test('changes queued behind a write in flight each build on the one before, never on the copy their dispatch began with', async ($, on) => {
+  const { hub, clock, gate } = engine(on)
+  await $.session.start({ cwd: '/repo', surface: 'desktop', isInteractive: true })
+  await $.tool.call({ tool: 'mcp__foundry__batch_start', title: 'T', issues: [12] })
+
+  // GitHub holds the first review's write; two more reviews queue behind it, each in its own dispatch.
+  gate.pattern = /-X PATCH .*issues\/comments\//
+  const record = (perspective: string) =>
+    $.tool.call({ tool: 'mcp__foundry__review_record', perspective, reviewer: `foundry:${perspective}`, verdict: 'ready', summary: 'fine' })
+  const first = record('security')
+  await clock.settle()
+  const second = record('architecture')
+  const third = record('usability')
+  await clock.settle()
+  gate.open()
+  for (const call of [first, second, third]) expect((await call).deny).toBeUndefined()
+  await clock.settle()
+
+  // Each review read the batch as the one before it left it: all three are kept, one revision each after the start's.
+  const state = hub.state(12)
+  expect(state?.reviews.map(r => r.perspective).sort()).toEqual(['architecture', 'security', 'usability'])
+  expect(state?.rev).toBe(4)
+})
+
 test('a session that wrote a batch before it was taken over never flags or rewrites the new owner’s state', async ($, on) => {
   const { hub } = engine(on)
   await $.session.start({ cwd: '/repo', surface: 'desktop', isInteractive: true })

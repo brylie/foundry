@@ -198,6 +198,19 @@ async function byKey($: EngineInterface, key: string): Promise<Batch | undefined
   return (await read($, batchesAtom)).find(b => batchKey(b) === key)
 }
 
+/**
+ * The batch as it stands now, whatever this dispatch read before. Every read
+ * of one dispatch sees the moment the dispatch began, so a press, command,
+ * tool call or tick that waited its turn behind another's write would read
+ * the batch from before that write, decide on it, and save over it. A write
+ * that misses its `ifVersion` moves the reads on to what stands, and
+ * `update` writes that way: an unchanged list either lands (the copy was
+ * current) or misses and reads again.
+ */
+async function current($: EngineInterface, key: string): Promise<Batch | undefined> {
+  return (await update($, batchesAtom, list => list)).find(b => batchKey(b) === key)
+}
+
 /** Keeps the batch in this session's copy, then writes it to GitHub. */
 async function save($: EngineInterface, batch: Batch): Promise<Batch> {
   const key = batchKey(batch)
@@ -229,8 +242,7 @@ async function save($: EngineInterface, batch: Batch): Promise<Batch> {
 
 /** Runs a move on a batch and keeps what it changed, a refused move's escalation included. */
 async function apply($: EngineInterface, key: string, move: (batch: Batch) => Move): Promise<Move | undefined> {
-  return exclusive(key, async () => {
-    const batch = await byKey($, key)
+  return exclusive($, key, async batch => {
     if (batch === undefined) return undefined
     const result = move(batch)
     if (result.batch === batch) return result
@@ -251,9 +263,15 @@ async function apply($: EngineInterface, key: string, move: (batch: Batch) => Mo
 // so a reload starts them empty, with nothing in flight.
 const queues = new Map<string, Promise<unknown>>()
 
-function exclusive<T>(key: string, work: () => Promise<T>): Promise<T> {
+/**
+ * Runs `work` in the batch's turn, handing it the batch as it stands when
+ * that turn comes. Decide on that copy alone: a read of the session's copy
+ * may be older (see `current`).
+ */
+function exclusive<T>($: EngineInterface, key: string, work: (batch: Batch | undefined) => Promise<T>): Promise<T> {
   const before = queues.get(key) ?? Promise.resolve()
-  const run = before.then(work, work)
+  const turn = async () => work(await current($, key))
+  const run = before.then(turn, turn)
   const settled = run.then(
     () => undefined,
     () => undefined,
@@ -486,9 +504,8 @@ async function syncReport($: EngineInterface, result: { error?: string }): Promi
  * stale.
  */
 async function rewrite($: EngineInterface, seen: Batch, next: Batch): Promise<void> {
-  await exclusive(batchKey(seen), async () => {
-    const current = await byKey($, batchKey(seen))
-    if (current !== undefined && current.rev > seen.rev) return
+  await exclusive($, batchKey(seen), async now => {
+    if (now !== undefined && now.rev > seen.rev) return
     await save($, next)
   })
 }
@@ -548,8 +565,8 @@ async function pollShip($: EngineInterface): Promise<void> {
   // The check and the write happen in the batch's turn, so a send-back or a
   // decision either lands first (and this reading is dropped) or waits until
   // this write is done (and builds on it).
-  await exclusive(key, async () => {
-    if (!isUnchanged(batch, await byKey($, key))) return
+  await exclusive($, key, async now => {
+    if (!isUnchanged(batch, now)) return
     const before = batch.waiting?.kind
     const saved = await save($, next)
     if (saved.waiting !== undefined && saved.waiting.kind !== before) $.ui.toast(`Foundry: waiting on you: ${WAIT_LABEL[saved.waiting.kind]}`)
@@ -938,7 +955,7 @@ export const register: Register = (on, options) => {
       // What happened before this session took the batch is in the result below, not news to deliver.
       delivered: { ...meta.delivered, [key]: batch.log.at(-1)?.n ?? 0 },
     }))
-    const saved = await exclusive(key, () => save($, batch))
+    const saved = await exclusive($, key, () => save($, batch))
     void openPane($)
     const error = (await read($, metaAtom)).errors[key]
     const next =
