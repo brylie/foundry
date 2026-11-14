@@ -360,11 +360,17 @@ async function sync($: EngineInterface): Promise<{ error?: string }> {
     const key = batchKey(theirs)
     const ours = local.find(b => batchKey(b) === key)
     const wrote = meta.written[key]
-    const isMoved = ours?.commentId !== undefined && theirs.commentId !== ours.commentId && ours.owner === self
+    // Only the batch's owner, by its own copy and by GitHub's, restores it. A session that wrote
+    // it once (before a takeover, or by a press) takes the owner's copy as it is.
+    const isOwned = ours?.owner === self && theirs.owner === self
+    const isMoved = isOwned && ours.commentId !== undefined && theirs.commentId !== ours.commentId
+    // GitHub holds exactly this session's copy: nothing changed it, whatever this session last
+    // recorded writing. A sync that reads a write of its own between the comment and the labels,
+    // before the write is recorded, lands here.
+    const isCurrent = ours !== undefined && fingerprint(theirs) === fingerprint(ours)
     // GitHub holds exactly this session's latest copy: a write whose comment landed and whose labels did not.
-    const isOursPending = ours !== undefined && meta.errors[key] !== undefined && fingerprint(theirs) === fingerprint(ours)
-    const isEdited =
-      ours !== undefined && wrote !== undefined && theirs.rev <= ours.rev && fingerprint(theirs) !== wrote && !isOursPending
+    const isOursPending = isCurrent && meta.errors[key] !== undefined
+    const isEdited = isOwned && wrote !== undefined && theirs.rev <= ours.rev && fingerprint(theirs) !== wrote && !isCurrent
     if (ours !== undefined && isOursPending) {
       // Finish that write: the comment is there, so it is rewritten in place and the labels set again.
       const finished = { ...ours, commentId: theirs.commentId }

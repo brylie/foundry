@@ -347,6 +347,82 @@ test('a batch another session takes over stops being this session’s', async ($
   expect(review.deny).toContain('runs no Foundry batch')
 })
 
+test("a sync that reads this session's own write in flight finds no outside edit", async ($, on) => {
+  const { hub, clock, gate } = engine(on)
+  await $.session.start({ cwd: '/repo', surface: 'desktop', isInteractive: true })
+  await $.tool.call({ tool: 'mcp__foundry__batch_start', title: 'T', issues: [12] })
+
+  // The review's comment lands, then GitHub holds the label read that follows it.
+  gate.pattern = /issues\/12\/labels\?/
+  const review = $.tool.call({ tool: 'mcp__foundry__review_record', perspective: 'security', reviewer: 'r', verdict: 'ready', summary: 's' })
+  await clock.settle()
+  // A sync reads GitHub in that window: the new revision is there, the write not yet done.
+  const synced = $.command.run({ command: 'foundry', args: 'sync', origin: { kind: 'composer' }, presentation: SHOWN })
+  await clock.settle()
+  gate.open()
+  expect((await review).deny).toBeUndefined()
+  await synced
+
+  expect(hub.state(12)?.waiting).toBeUndefined()
+  expect(hub.state(12)?.log.some(e => e.text.includes('outside edit'))).toBe(false)
+})
+
+test('a session that wrote a batch before it was taken over never flags or rewrites the new owner’s state', async ($, on) => {
+  const { hub } = engine(on)
+  await $.session.start({ cwd: '/repo', surface: 'desktop', isInteractive: true })
+  await $.tool.call({ tool: 'mcp__foundry__batch_start', title: 'T', issues: [12] })
+  const sync = () => $.command.run({ command: 'foundry', args: 'sync', origin: { kind: 'composer' }, presentation: SHOWN })
+  /** Another session's write: itself the owner, one revision on, with a change of its own. */
+  const ownerWrites = (title: string) => {
+    const comment = hub.comments.get(12)?.[0]
+    if (comment) {
+      comment.body = comment.body
+        .replace('"owner":"session-1"', '"owner":"session-2"')
+        .replace(/"title":"[^"]*"/, `"title":"${title}"`)
+        .replace(/"rev":(\d+)/, (_, n) => `"rev":${Number(n) + 1}`)
+    }
+  }
+
+  ownerWrites('Taken over')
+  await sync()
+  const patches = () => hub.calls.filter(c => c.includes('-X PATCH')).length
+  const before = patches()
+  // GitHub still holds the owner's copy, which this session now holds too: nothing to restore.
+  await sync()
+  ownerWrites('Moved on')
+  await sync()
+  await sync()
+
+  expect(patches()).toBe(before)
+  expect(hub.state(12)?.waiting).toBeUndefined()
+  expect(hub.state(12)?.title).toBe('Moved on')
+})
+
+test("a takeover that lands while this session's own write is failing is kept, not restored over", async ($, on) => {
+  const { hub } = engine(on)
+  await $.session.start({ cwd: '/repo', surface: 'desktop', isInteractive: true })
+  await $.tool.call({ tool: 'mcp__foundry__batch_start', title: 'T', issues: [12] })
+  // This session's next revision never reaches GitHub.
+  hub.failOnce(/-X PATCH .*issues\/comments\//)
+  await $.tool.call({ tool: 'mcp__foundry__review_record', perspective: 'security', reviewer: 'r', verdict: 'ready', summary: 's' })
+
+  // Another session takes over from GitHub's copy: the same revision number, its own content.
+  const comment = hub.comments.get(12)?.[0]
+  if (comment) {
+    comment.body = comment.body
+      .replace('"owner":"session-1"', '"owner":"session-2"')
+      .replace(/"title":"[^"]*"/, '"title":"Taken over"')
+      .replace(/"rev":(\d+)/, (_, n) => `"rev":${Number(n) + 1}`)
+  }
+  await $.command.run({ command: 'foundry', args: 'sync', origin: { kind: 'composer' }, presentation: SHOWN })
+
+  expect(hub.state(12)?.owner).toBe('session-2')
+  expect(hub.state(12)?.title).toBe('Taken over')
+  expect(hub.state(12)?.waiting).toBeUndefined()
+  const review = await $.tool.call({ tool: 'mcp__foundry__review_record', perspective: 'usability', reviewer: 'r', verdict: 'ready', summary: 's' })
+  expect(review.deny).toContain('runs no Foundry batch')
+})
+
 test('a write that does not reach GitHub is reported and retried at the next sync', async ($, on) => {
   const { hub } = engine(on)
   await $.session.start({ cwd: '/repo', surface: 'desktop', isInteractive: true })

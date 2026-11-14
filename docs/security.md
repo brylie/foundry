@@ -19,7 +19,7 @@ The panel shows every open batch in the repository, whichever session runs it.
 
 **Only the mod writes that state**, and it guards its own record:
 
-- **Restores outside edits.** If the comment changes without a newer revision from the mod, or disappears, the mod restores its own copy and the card shows an alert.
+- **Restores outside edits.** If the comment changes without a newer revision from the mod, or disappears, the mod restores its own copy and the card shows an alert. Only the session that runs the batch does this, and only when GitHub's copy differs from its own. Another session that once wrote the batch, before a takeover or through a press on its card, takes the owner's copy as it is.
 - **Reads back only its own records.** A state comment counts only if the mod's own GitHub account wrote it and it names that repository and lead issue. The comment the mod already knows wins, so a copy someone else posts, or a second one beside it, is ignored.
 - **Leaves other labels alone.** It adds and removes labels one by one, so labels other people set stay as they are.
 - **Never double-posts.** A write that fails, during an outage for example, is reported and retried at the next sync, never posted twice.

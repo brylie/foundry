@@ -4,6 +4,12 @@ Foundry's notable changes, newest first. Versions follow [Semantic Versioning](h
 
 ## Unreleased
 
+- **No more false "changed outside the mod" alerts.** A sync flagged an outside edit, and wrote its own copy back, in three cases where nothing outside had changed:
+  - It read the session's own write between the comment and the labels.
+  - A session that wrote a batch before it was taken over kept comparing the new owner's state with its own last write, and flagged it after every one of the owner's writes.
+  - A session whose write had failed restored its copy over another session's takeover.
+
+  Now only the batch's owner restores, and only when GitHub's copy differs from the owner's own. A batch that shows the alert from before keeps it until you acknowledge it.
 - **Documentation reorganized.** The README is now a short introduction and quick start. The details moved to guides in `docs/`: [How it works](docs/how-it-works.md), [Configuration](docs/configuration.md), [Reference](docs/reference.md) and [Security model](docs/security.md). A new [CONTRIBUTING.md](CONTRIBUTING.md) covers development.
 - **The guard reads long commands in linear time.** A command with a long run of spaces after `-X` could take the label check a minute: two adjacent `\s*` in one pattern backtracked quadratically. The `foundry.yaml` reader had the same pattern, on a file the repository trusts.
 - **The guard sees more redirections.** A `>` straight after a word (`echo v42>file`), a descriptor of two digits (`10>file`), `>|` and `<>` each write a file, and the stages that hold edits now hold them too.
