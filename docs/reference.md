@@ -63,7 +63,7 @@ The mod lives in `hooks/` and is loaded with the plugin. It holds the panel, the
 | `conflict_raise` | Escalates a reviewer conflict to you. |
 | `tests_record` | Records a local test run. |
 | `signoff_request` | Asks you to sign off the current loop. |
-| `pr_opened` | Starts watching the pull request's ship gates. |
+| `pr_opened` | Records the batch's pull request: the draft in the build loop, so the build sign-off can link to it, then the ready one, whose ship gates it watches. |
 | `send_back` | Returns a shipping batch to the build loop. |
 | `batch_status` | Reads where the batch stands. |
 

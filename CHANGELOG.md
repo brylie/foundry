@@ -4,6 +4,8 @@ Foundry's notable changes, newest first. Versions follow [Semantic Versioning](h
 
 ## Unreleased
 
+- **The plan, on GitHub.** The plan file stays in the repository; at each review and sign-off the mod also copies it into a comment on the lead issue, rewriting it only when the plan changed. It reads anywhere, the GitHub app on your phone included. The card shows **Plan on GitHub**, and the question card and the agent's sign-off message link to it.
+- **A draft pull request during the build.** The build loop now pushes and opens a draft (`gh pr create --draft`), so the build sign-off can link to the diff on GitHub. A pull request for review, or `gh pr ready`, still waits for the build sign-off; after it, the agent marks the draft ready and the ship gates watch it.
 - **The ship gate no longer waits on the online reviewers.** It passes when CI is green and no change request or review thread from the allowlist is open. What a reviewer finds still arrives as a change request or a thread, which the agent picks up, and which holds the pull request until it's fixed. Gone with the wait:
   - the 30-minute timeout and its "Online reviewer silent" alert;
   - the "Online reviewer comment to read" alert for comment-only reviewers such as gitar-bot;

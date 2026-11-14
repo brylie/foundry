@@ -92,7 +92,7 @@ function github() {
       const made = { id: nextId++, body: (JSON.parse(stdin ?? '{}') as { body: string }).body, user: WRITER }
       comments.set(issue, [...list, made])
 
-      return JSON.stringify(made)
+      return JSON.stringify({ ...made, html_url: `https://github.com/o/r/issues/${issue}#issuecomment-${made.id}` })
     }
     if (/issues\/comments\/\d+/.test(path)) {
       const id = Number(/comments\/(\d+)/.exec(path)?.[1])
@@ -100,8 +100,9 @@ function github() {
       // A comment that is gone answers 404, as GitHub does.
       if (found === undefined) throw new NotFound()
       found.body = (JSON.parse(stdin ?? '{}') as { body: string }).body
+      const on = [...comments].find(([, list]) => list.includes(found))?.[0]
 
-      return '{}'
+      return JSON.stringify({ ...found, html_url: `https://github.com/o/r/issues/${on}#issuecomment-${found.id}` })
     }
     const one = /issues\/\d+\/labels\/([^/?]+)/.exec(path)
     if (one && method === 'DELETE') {
@@ -271,9 +272,14 @@ test('a batch moves through every stage, its state in GitHub, gated by the perso
   expect(prompts.at(-1)).toContain('approved the plan')
   expect(hub.state(12)?.stage).toBe('build')
 
-  // Build loop: commits yes, pushes no.
+  // Build loop: commits and a draft pull request, for the build sign-off to read; review waits for the sign-off.
   expect((await $.tool.call({ tool: 'Bash', command: 'git commit -m "Name the ports (#12)"' })).deny).toBeUndefined()
-  expect((await $.tool.call({ tool: 'Bash', command: 'git push -u origin HEAD' })).deny).toContain('after the build sign-off')
+  expect((await $.tool.call({ tool: 'Bash', command: 'git push -u origin HEAD' })).deny).toBeUndefined()
+  expect((await $.tool.call({ tool: 'Bash', command: 'gh pr create --title t --body-file b.md' })).deny).toContain('--draft')
+  expect((await $.tool.call({ tool: 'Bash', command: 'gh pr create --draft --title t --body-file b.md' })).deny).toBeUndefined()
+  expect((await $.tool.call({ tool: 'Bash', command: 'gh pr ready 9' })).deny).toContain('after the build sign-off')
+  const draft = await $.tool.call({ tool: 'mcp__foundry__pr_opened', pr: 'https://github.com/o/r/pull/9' })
+  expect(String(draft.result)).toContain('Recorded draft pull request #9')
   await $.tool.call({ tool: 'mcp__foundry__tests_record', command: 'npm test', passed: true, summary: '42 passed' })
   await approveAll($)
   await $.tool.call({ tool: 'mcp__foundry__signoff_request', summary: 'The change' })
@@ -523,6 +529,43 @@ test('ending a batch asks first, on the card and by command', async ($, on) => {
   await again.press({ key: '12-end-confirm' })
   await again.unmount()
   expect(hub.state(12)?.stage).toBe('done')
+})
+
+test('the plan is copied to the lead issue when it changes, in one comment, and linked wherever it is read', async ($, on) => {
+  const { hub, files, asks, clock } = engine(on)
+  await $.session.start({ cwd: '/repo', surface: 'desktop', isInteractive: true })
+  await $.tool.call({ tool: 'mcp__foundry__batch_start', title: 'T', issues: [12] })
+  const copies = () => (hub.comments.get(12) ?? []).filter(c => c.body.includes('foundry:plan-copy'))
+
+  // No plan file yet: nothing is copied.
+  await $.tool.call({ tool: 'mcp__foundry__review_record', perspective: 'security', reviewer: 'r', verdict: 'revise', summary: 's' })
+  expect(copies()).toHaveLength(0)
+
+  files.set('/repo/docs/plans/12.md', '# Plan for T\n\nFirst draft.')
+  await $.tool.call({ tool: 'mcp__foundry__review_record', perspective: 'usability', reviewer: 'r', verdict: 'ready', summary: 's' })
+  expect(copies()).toHaveLength(1)
+  expect(copies()[0]?.body).toContain('First draft.')
+  const patches = () => hub.calls.filter(c => c.includes(`issues/comments/${copies()[0]?.id}`)).length
+  const before = patches()
+
+  // An unchanged plan isn't written again; a revised one is, in the same comment.
+  await $.tool.call({ tool: 'mcp__foundry__review_record', perspective: 'accessibility', reviewer: 'r', verdict: 'ready', summary: 's' })
+  expect(patches()).toBe(before)
+  files.set('/repo/docs/plans/12.md', '# Plan for T\n\nRevised after review.')
+  await approveAll($)
+  const asked = await $.tool.call({ tool: 'mcp__foundry__signoff_request', summary: 'Plan' })
+  expect(copies()).toHaveLength(1)
+  expect(copies()[0]?.body).toContain('Revised after review.')
+  const url = hub.state(12)?.planCopy?.url ?? ''
+  expect(url).toMatch(/^https:\/\/github\.com\/o\/r\/issues\/12#issuecomment-\d+$/)
+
+  // The link reaches the agent, the question and the card.
+  expect(String(asked.result)).toContain(url)
+  await clock.advance(60_000)
+  expect(asks.questions[0]).toContain(`The plan: ${url}`)
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect(await ui.find({ type: 'Link', text: /Plan on GitHub/ })).toBeDefined()
+  await ui.unmount()
 })
 
 test("a card shows the batch's plan file from this checkout, at a press", async ($, on) => {

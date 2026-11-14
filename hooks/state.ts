@@ -213,6 +213,7 @@ export function isBatch(v: unknown): v is Batch {
     ['requirements', 'specifications', 'decisions', 'user'].every(kind => isListOf((v['docs'] as Shape)[kind], isString)) &&
     isString(v['owner']) &&
     isOptional(v['commentId'], isInt) &&
+    isOptional(v['planCopy'], c => isObject(c) && isInt(c['id']) && isString(c['url']) && isString(c['digest'])) &&
     isInt(v['rev']) &&
     isNumber(v['startedAt'])
   )
@@ -221,6 +222,48 @@ export function isBatch(v: unknown): v is Batch {
 /** The record compared for edits: the batch as JSON, without what only this machine knows. */
 export function fingerprint(batch: Batch): string {
   return JSON.stringify({ ...batch, commentId: undefined })
+}
+
+/**
+ * Marks the comment that holds the copy of a batch's plan. Its words match
+ * the guard's stage-label pattern on purpose: no agent command can write it.
+ */
+export const PLAN_MARKER = '<!-- foundry:plan-copy -->'
+/** GitHub's limit on a comment is 65,536 characters; the plan's copy keeps well inside it. */
+const PLAN_COPY_CHARS = 60_000
+
+/**
+ * The comment that copies the batch's plan file to its lead issue, for
+ * reading on GitHub, the phone included. The file on the branch stays the
+ * plan: the copy says so, and a state marker inside the plan is defused, so
+ * the copy is never read as Foundry's state.
+ */
+export function renderPlanCopy(batch: Batch, path: string, text: string): string {
+  const safe = text.replaceAll(STATE_MARKER, '<!-- (state marker) -->')
+  const shown = safe.length > PLAN_COPY_CHARS ? `${safe.slice(0, PLAN_COPY_CHARS)}\n\n… The rest is in \`${path}\`.` : safe
+
+  return [
+    PLAN_MARKER,
+    `**Foundry plan** · ${batch.title} (#${batch.lead})`,
+    '',
+    `<sub>A copy of \`${path}\` from the batch's branch, kept up to date by the Foundry mod for reading anywhere. The file in the repository is the plan; edits here are replaced.</sub>`,
+    '',
+    '---',
+    '',
+    shown,
+  ].join('\n')
+}
+
+/** A short digest of a text, to tell whether a plan changed since its copy was written. */
+export function digest(text: string): string {
+  // FNV-1a, 32 bits, with the length: enough to spot an edit, and no secret.
+  let hash = 0x811c9dc5
+  for (let i = 0; i < text.length; i++) {
+    hash ^= text.charCodeAt(i)
+    hash = Math.imul(hash, 0x01000193)
+  }
+
+  return `${text.length}:${(hash >>> 0).toString(16)}`
 }
 
 /** The revision a fingerprint records. */

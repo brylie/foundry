@@ -473,7 +473,7 @@ const NEXT: Record<LoopStage, Stage> = { plan: 'build', build: 'ship' }
 
 const AFTER: Record<LoopStage, string> = {
   plan: 'Claim the issues, then build and test following the approved plan.',
-  build: 'Push the branch and open the pull request, then call mcp__foundry__pr_opened with its URL.',
+  build: 'Mark the draft pull request ready for review (`gh pr ready <number>`), or open one if there is none yet, then call mcp__foundry__pr_opened with its URL.',
 }
 
 /**
@@ -541,7 +541,8 @@ export function decide(batch: Batch, decision: Decision, now: number): Move {
 
 /** The agent's PR is open: the ship stage starts watching it. */
 export function prOpened(batch: Batch, pr: number, url: string, now: number): Move {
-  if (batch.stage !== 'ship') return { batch, error: 'The pull request opens after the build sign-off.' }
+  // A draft opens in the build loop, for the build sign-off to read; the gates watch it once it ships.
+  if (batch.stage !== 'ship' && batch.stage !== 'build') return { batch, error: 'The pull request opens in the build loop, as a draft.' }
   if (batch.ship !== undefined && batch.ship.pr !== pr) {
     return { batch, error: `This batch already ships as #${batch.ship.pr}.` }
   }
@@ -557,5 +558,7 @@ export function prOpened(batch: Batch, pr: number, url: string, now: number): Mo
     outsiders: [],
   }
 
-  return { batch: log({ ...batch, ship }, now, `Pull request #${pr} opened.`) }
+  const what = batch.stage === 'build' ? `Draft pull request #${pr} opened.` : `Pull request #${pr} is ready for review.`
+
+  return { batch: log({ ...batch, ship }, now, what) }
 }

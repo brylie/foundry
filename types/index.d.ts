@@ -139,6 +139,12 @@ export type Batch = {
   owner: string
   /** The state comment's id, once written. */
   commentId?: number
+  /**
+   * The copy of the plan file on the lead issue, which the mod keeps for
+   * reading anywhere: its comment's id and link, and the digest of the plan
+   * text it holds, so it is rewritten only when the plan changes.
+   */
+  planCopy?: { id: number; url: string; digest: string }
   /** Raised on every write, so an edited comment can be told from a newer one. */
   rev: number
   startedAt: number

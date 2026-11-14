@@ -15,9 +15,9 @@ You are the **oversight agent**: you coordinate the stages, and others judge. Si
 | 1. Intake | Pick a batch of related, triaged issues | |
 | 2. Plan loop | Write the plan; the docs pass updates requirements, specification and decisions; all six reviewers approve both | code: only the requirement, specification and decision docs may change; commits, claiming issues |
 | 3. Plan sign-off | The maintainer approves the plan and its docs | everything, while they decide |
-| 4. Build loop | Build, test and update user docs; all six reviewers approve the work | pushes, the pull request |
+| 4. Build loop | Build, test and update user docs; open a draft PR; all six reviewers approve the work | a pull request for review (only a draft opens) |
 | 5. Build sign-off | The maintainer approves the implementation | everything, while they decide |
-| 6. Ship gates | Open the PR; online reviewers pass and CI goes green | edits and commits (send the work back first) |
+| 6. Ship gates | Mark the PR ready; CI goes green and nothing the allowlist raised is open | edits and commits (send the work back first) |
 
 Merging is always the maintainer's.
 
@@ -146,7 +146,15 @@ Once the plan is signed off:
 3. **Build in the plan's order, one issue per commit,** with the issue number in the subject: `Name the ports instead of bare indexes (#534)`. Put no "Closes" in commits. Meet each "Done when" item by item; a bug gets a test that fails without the fix. Do not build what no issue or spec asks for. If building raises a new behaviour question, or the plan turns out wrong in a way the maintainer would care about, stop and ask.
 4. **Update the user docs in the same commit as the code they describe.** That covers reference and user docs, help pages, examples, the README and the changelog. Regenerate docs the project builds from code. The agreed specification stays as signed off. If the code has to differ from it, stop and ask: the spec changes only with the maintainer's agreement.
 5. **Test.** Run the project's checks (the commands its `AGENTS.md`, `CLAUDE.md` or `CONTRIBUTING.md` names, or its task runner) and record each run with `mcp__foundry__tests_record`. Fix causes; never `--no-verify`.
-6. **Review.** Spawn the same reviewers in parallel with the stage `build`. Give each the repository, the branch and base, the head commit, the issues, the approved plan, and the batch's doc folders. Record each verdict, fix what is right (say why to a reviewer whose finding you decline), commit, re-test, and re-run the reviewers that have not approved. If a fix touches what an approving reviewer checked, re-run it too: its approval was of the earlier commit. Conflicts and the round limit work as in the plan loop.
+6. **Open a draft pull request** once the first commits are in, so the maintainer can read the change on GitHub before the build sign-off. Write the body to a file as in step 6 of the ship gates, then:
+
+   ```bash
+   git push -u origin HEAD
+   gh pr create --draft --base <base> --title "<title>" --body-file <file>
+   ```
+
+   Call `mcp__foundry__pr_opened` with its URL. Push again as you commit. A pull request opened without `--draft` is refused until the build sign-off.
+7. **Review.** Spawn the same reviewers in parallel with the stage `build`. Give each the repository, the branch and base, the head commit, the issues, the approved plan, and the batch's doc folders. Record each verdict, fix what is right (say why to a reviewer whose finding you decline), commit, re-test, and re-run the reviewers that have not approved. If a fix touches what an approving reviewer checked, re-run it too: its approval was of the earlier commit. Conflicts and the round limit work as in the plan loop.
 
 **Dropping an issue.** If an issue turns out much bigger, or needs a decision the maintainer cannot give now, drop it: unassign it, revert what only it needed, and comment on the issue if you learned something. Finish the rest.
 
@@ -156,13 +164,14 @@ When every reviewer approves and the checks pass, call `mcp__foundry__signoff_re
 - what changed per issue;
 - how each review ended;
 - the test results;
-- what nobody checked (a manual check, a real device).
+- what nobody checked (a manual check, a real device);
+- the draft pull request's link, so the maintainer can read the diff on GitHub.
 
 **End your turn.**
 
 ## 6. Ship gates
 
-Once the implementation is signed off, push and open one pull request. Write the body to a file, using the repository's template if it has one. It covers:
+Once the implementation is signed off, push the last commits and mark the draft ready for review. If there is no draft, open the pull request now. Update its body from a file, using the repository's template if it has one. It covers:
 - **What and why:** the shared reason, and what changed per issue.
 - **Closing lines:** one `Closes #N` line per issue. GitHub links only the first number in `Closes #1, #2`.
 - **Docs:** each requirement, specification section, decision record and user doc the batch changed, with its path.
@@ -170,11 +179,12 @@ Once the implementation is signed off, push and open one pull request. Write the
 - **The ending:** the attribution line the session asks for.
 
 ```bash
-git push -u origin HEAD
-gh pr create --base <base> --title "<title>" --body-file <file>
+git push
+gh pr edit <number> --body-file <file>
+gh pr ready <number>
 ```
 
-Call `mcp__foundry__pr_opened` with the URL. The mod watches the pull request, and the ship gates pass only when both of these hold:
+Call `mcp__foundry__pr_opened` with the URL again. The mod watches the pull request, and the ship gates pass only when both of these hold:
 
 - **CI is green:** every check passes, Codecov's status checks included.
 - **Nothing is open:** no review requests changes, and no review thread is unresolved. An online reviewer's thread you resolved still counts as open until that reviewer has reviewed a newer commit than the one it was raised on.

@@ -129,6 +129,31 @@ export async function writeBatch($: EngineInterface, batch: Batch): Promise<Batc
   return { ...batch, commentId }
 }
 
+/**
+ * Writes the plan's copy on the lead issue: in place when it has one, and a
+ * new comment only when there is none or it is gone, as the state comment.
+ */
+export async function writePlanCopy($: EngineInterface, batch: Batch, body: string): Promise<{ id: number; url: string }> {
+  const input = JSON.stringify({ body })
+  const post = () => ghJson<{ id: number; html_url: string }>($, ['api', '-X', 'POST', `repos/${batch.repo}/issues/${batch.lead}/comments`, '--input', '-'], input)
+  const id = batch.planCopy?.id
+  if (id === undefined) {
+    const made = await post()
+
+    return { id: made.id, url: made.html_url }
+  }
+  try {
+    const edited = await ghJson<{ id: number; html_url: string }>($, ['api', '-X', 'PATCH', `repos/${batch.repo}/issues/comments/${id}`, '--input', '-'], input)
+
+    return { id, url: edited.html_url }
+  } catch (error) {
+    if (!/HTTP 404|Not Found/i.test(error instanceof Error ? error.message : String(error))) throw error
+    const made = await post()
+
+    return { id: made.id, url: made.html_url }
+  }
+}
+
 type Comment = { id: number; body: string; user: string }
 
 /**

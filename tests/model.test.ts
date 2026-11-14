@@ -20,7 +20,8 @@ import {
   sendBack,
   trackIndex,
 } from '../hooks/model'
-import { isBatch, labelsFor, parseState, renderState } from '../hooks/state'
+import { STATE_MARKER } from '../hooks/guard'
+import { digest, isBatch, labelsFor, parseState, renderPlanCopy, renderState } from '../hooks/state'
 
 const FIVE = parseReviewers('product-owner,usability,accessibility,architecture,security')
 const SETTINGS = {
@@ -71,6 +72,23 @@ describe('deciding away from the panel', () => {
     expect(decisionOptions(start())).toEqual([])
     expect(howToDecide(start())).not.toContain('typing')
     expect(planPath(start())).toBe('docs/plans/12.md')
+  })
+})
+
+describe("the plan's copy", () => {
+  test('says the file is the plan, and a plan that quotes the state marker is never read as state', async () => {
+    const batch = start()
+    const plan = `# Plan\n\nThe mod writes ${STATE_MARKER} and a JSON block:\n\n\`\`\`json\n${JSON.stringify({ foundry: 1, batch })}\n\`\`\``
+    const copy = renderPlanCopy(batch, 'docs/plans/12.md', plan)
+    expect(copy).toContain('The file in the repository is the plan')
+    expect(copy).not.toContain(STATE_MARKER)
+    expect(parseState(copy)).toBeUndefined()
+  })
+
+  test('a digest tells an edit apart, and a long plan is cut inside GitHub’s limit', async () => {
+    expect(digest('a plan')).toBe(digest('a plan'))
+    expect(digest('a plan')).not.toBe(digest('a plam'))
+    expect(renderPlanCopy(start(), 'docs/plans/12.md', 'x'.repeat(70_000)).length).toBeLessThan(65_536)
   })
 })
 
