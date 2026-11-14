@@ -38,6 +38,9 @@ A side pane that shows each batch as a card moving down the stages. For each sta
 - status lights for each reviewer
 - test and CI status
 - a clear "waiting on you" alert for sign-offs, conflicts, and round-limit escalations
+- a link to the batch's plan: the plan is a file on the branch, `docs/plans/<lead>.md`, shown on the card
+
+Brylie also decides away from the panel, which the mobile app doesn't show: Foundry asks in a question card when a batch starts waiting, and every `/foundry` decision can be typed, from a phone over Remote Control too. The agent names the command to type when it stops at a gate.
 
 ## Plugin parts
 - **Sub-agents:** the six reviewers and the oversight agent. The product owner and architecture also author documentation in the plan loop.

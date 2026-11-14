@@ -21,6 +21,13 @@ export const DOC_CANDIDATES: Record<keyof DocFolders, string[]> = {
 export const PLAN_DOCS: readonly (keyof DocFolders)[] = ['requirements', 'specifications', 'decisions']
 
 export const NO_DOCS: DocFolders = { requirements: [], specifications: [], decisions: [], user: [] }
+
+/** Where a batch's plan lives on its branch, beside the docs it agrees: one file per batch, named by its lead issue. */
+export const PLAN_FOLDER = 'docs/plans'
+
+export function planPath(batch: Pick<Batch, 'lead'>): string {
+  return `${PLAN_FOLDER}/${batch.lead}.md`
+}
 export const DEFAULT_MAX_ROUNDS = 3
 export const DEFAULT_ONLINE_REVIEWERS = 'coderabbitai[bot]'
 export const DEFAULT_BOT_TIMEOUT_MINUTES = 30
@@ -200,7 +207,7 @@ function wait(batch: Batch, waiting: Omit<Waiting, 'at'>, at: number): Batch {
 function busy(batch: Batch): string | undefined {
   if (batch.waiting === undefined) return undefined
 
-  return `"${batch.title}" is waiting on the person (${WAIT_LABEL[batch.waiting.kind]}). End your turn; you will be told when they decide.`
+  return `"${batch.title}" is waiting on the person (${WAIT_LABEL[batch.waiting.kind]}). End your turn, and tell them how to decide: ${howToDecide(batch)} You will be told when they do.`
 }
 
 /**
@@ -376,6 +383,54 @@ export function choices(batch: Batch): Decision['action'][] {
     default:
       return []
   }
+}
+
+/** One way the person can answer a wait: its label on a card or in Foundry's question, and the command to type. */
+export type DecisionOption = { label: string; decision: Decision; typed: string }
+
+/**
+ * The person's options for the batch's wait, as the panel labels them, each
+ * with the `/foundry` command that does the same: what they type where no
+ * panel shows, on their phone say.
+ */
+export function decisionOptions(batch: Batch): DecisionOption[] {
+  const at = `#${batch.lead}`
+  const waiting = batch.waiting
+
+  return choices(batch).flatMap((action): DecisionOption[] => {
+    switch (action) {
+      case 'approve':
+        return [{ label: 'Approve', decision: { action }, typed: `/foundry approve ${at}` }]
+      case 'changes': {
+        const label = waiting?.kind === 'signoff' ? 'Request changes' : batch.stage === 'ship' ? 'Send back anyway' : 'Another round'
+
+        return [{ label, decision: { action }, typed: `/foundry changes ${at}` }]
+      }
+      case 'veto':
+        return (waiting?.perspectives ?? []).map(p => ({ label: `Veto ${p}`, decision: { action, perspective: p }, typed: `/foundry veto ${p} ${at}` }))
+      case 'compromise':
+        return [{ label: "I'll write a compromise", decision: { action }, typed: `/foundry compromise ${at}` }]
+      case 'keep-waiting':
+        return [{ label: 'Keep waiting', decision: { action }, typed: `/foundry wait ${at}` }]
+      case 'dismiss':
+        return (waiting?.bots ?? []).map(bot => ({ label: `Dismiss ${bot}`, decision: { action, login: bot }, typed: `/foundry dismiss ${bot} ${at}` }))
+      case 'acknowledge':
+        return [{ label: 'OK', decision: { action }, typed: `/foundry ack ${at}` }]
+      case 'end':
+        return [{ label: 'End batch', decision: { action }, typed: `/foundry end ${at}` }]
+      default:
+        return []
+    }
+  })
+}
+
+/** Where and how the person answers the batch's wait, in a sentence for the agent to pass on. */
+export function howToDecide(batch: Batch): string {
+  const typed = decisionOptions(batch).map(o => `\`${o.typed}\``)
+  const list = typed.length <= 1 ? (typed[0] ?? '') : `${typed.slice(0, -1).join(', ')} or ${typed.at(-1) ?? ''}`
+  const commands = typed.length === 0 ? '' : ` or by typing ${list} (from their phone too)`
+
+  return `on the batch's card in the Foundry panel, in the question Foundry asks them${commands}.`
 }
 
 const NEXT: Record<LoopStage, Stage> = { plan: 'build', build: 'ship' }

@@ -76,7 +76,7 @@ Then call `mcp__foundry__batch_start` with the pull request title and the issues
 
 ## 2. The plan loop
 
-**Write the plan** in your message, complete enough that a reviewer who never saw this session can check it:
+**Write the plan** to the batch's plan file, `docs/plans/<lead>.md` (`batch_start` names it; the plan stage lets you write it), complete enough that a reviewer who never saw this session can check it. The maintainer reads it on the batch's card, so keep it there and revise it there, not only in your messages:
 
 1. **The batch:** a table of `# | Title | Priority | Size | Why it belongs`, the shared reason, the PR title, a size estimate, and the runner-up group.
 2. **Left out on purpose,** with one-line reasons.
@@ -133,14 +133,16 @@ When every reviewer approves, call `mcp__foundry__signoff_request` with a markdo
 - the batch, and the design in a few lines;
 - **the docs it changes:** each requirement, specification section and decision record, with its path. Signing off the plan agrees these.
 - how each review ended, and in how many rounds;
-- the open questions, with recommendations. **End your turn.** The maintainer approves in the panel or with `/foundry approve`. If they ask for changes, revise and run the loop again (a new round).
+- the open questions, with recommendations.
+
+Keep the summary short enough to read on a phone: the full plan is in its file. **End your turn,** and tell the maintainer how they decide, as the tool's result says: on the batch's card, in the question Foundry asks them, or by typing `/foundry approve #<lead>` or `/foundry changes #<lead>`, from their phone too. If they ask for changes, their words reach you; revise the plan file and run the loop again (a new round).
 
 ## 4. The build loop
 
 Once the plan is signed off:
 
 1. **Claim** each issue (`gh issue edit N --add-assignee @me`), after checking none was claimed or linked to a PR since intake. If one was, stop and ask.
-2. **Commit the agreed docs first.** Mark the changed requirement and specification sections in the status the project uses for agreed work, then commit them on their own: `Agree the requirements and spec for <theme>`.
+2. **Commit the agreed docs first.** Mark the changed requirement and specification sections in the status the project uses for agreed work, then commit them on their own with the plan file: `Agree the plan, requirements and spec for <theme>`.
 3. **Build in the plan's order, one issue per commit,** with the issue number in the subject: `Name the ports instead of bare indexes (#534)`. Put no "Closes" in commits. Meet each "Done when" item by item; a bug gets a test that fails without the fix. Do not build what no issue or spec asks for. If building raises a new behaviour question, or the plan turns out wrong in a way the maintainer would care about, stop and ask.
 4. **Update the user docs in the same commit as the code they describe.** That covers reference and user docs, help pages, examples, the README and the changelog. Regenerate docs the project builds from code. The agreed specification stays as signed off. If the code has to differ from it, stop and ask: the spec changes only with the maintainer's agreement.
 5. **Test.** Run the project's checks (the commands its `AGENTS.md`, `CLAUDE.md` or `CONTRIBUTING.md` names, or its task runner) and record each run with `mcp__foundry__tests_record`. Fix causes; never `--no-verify`.
