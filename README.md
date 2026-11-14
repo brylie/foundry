@@ -76,7 +76,7 @@ Start a batch from a milestone, a theme, or specific issues:
 /foundry:begin 42
 ```
 
-The Foundry panel opens beside the chat. When a card says **Waiting on you**, decide with its buttons or with `/foundry approve`.
+The Foundry panel opens beside the chat. When a card says **Waiting on you**, decide with its buttons or with `/foundry approve`. The same buttons show on a card under the agent's request in the conversation, so you can decide from the Claude mobile app too.
 
 ## Configuration
 

@@ -486,7 +486,7 @@ export function howToDecide(batch: Batch): string {
   const list = typed.length <= 1 ? (typed[0] ?? '') : `${typed.slice(0, -1).join(', ')} or ${typed.at(-1) ?? ''}`
   const commands = typed.length === 0 ? '' : ` or by typing ${list} (from their phone too)`
 
-  return `on the batch's card in the Foundry panel, in the question Foundry asks them${commands}.`
+  return `on the card under your request in the conversation, on the batch's card in the Foundry panel, in the question Foundry asks them${commands}.`
 }
 
 const NEXT: Record<LoopStage, Stage> = { plan: 'build', build: 'ship' }

@@ -42,6 +42,8 @@ A side pane that shows each batch as a card moving down the stages. For each sta
 
 Brylie also decides away from the panel, which the mobile app doesn't show: Foundry asks in a question card when a batch starts waiting, and every `/foundry` decision can be typed, from a phone over Remote Control too. The agent names the command to type when it stops at a gate.
 
+The agent's own tool call that opens a wait (a sign-off request, a conflict, a round limit) draws a decision card under its row in the conversation, on every surface the mobile app included. It offers the panel's buttons, and answers only the wait that call opened: once that wait is decided, it reads "decided" and offers nothing.
+
 ## Plugin parts
 - **Sub-agents:** the six reviewers and the oversight agent. The product owner and architecture also author documentation in the plan loop.
 - **Mod:** the panel and the gate logic.
