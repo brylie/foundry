@@ -423,6 +423,82 @@ test("a takeover that lands while this session's own write is failing is kept, n
   expect(review.deny).toContain('runs no Foundry batch')
 })
 
+/** Rewrites the state comment on #12 as another hand would: `bump` revisions on, the rest as `edit` says. */
+function rewriteState(hub: ReturnType<typeof engine>['hub'], bump: number, edit: (body: string) => string) {
+  const comment = hub.comments.get(12)?.[0]
+  if (comment) comment.body = edit(comment.body).replace(/"rev":(\d+)/, (_, n) => `"rev":${Number(n) + bump}`)
+}
+
+test('an edit that names another owner without a newer revision is restored and flagged, not taken as a takeover', async ($, on) => {
+  const { hub } = engine(on)
+  await $.session.start({ cwd: '/repo', surface: 'desktop', isInteractive: true })
+  await $.tool.call({ tool: 'mcp__foundry__batch_start', title: 'T', issues: [12] })
+
+  rewriteState(hub, 0, body => body.replace('"owner":"session-1"', '"owner":"session-2"'))
+  await $.command.run({ command: 'foundry', args: 'sync', origin: { kind: 'composer' }, presentation: SHOWN })
+
+  expect(hub.state(12)?.owner).toBe('session-1')
+  expect(hub.state(12)?.waiting?.kind).toBe('tamper')
+  // The session still runs the batch: it waits on the person, not on another session.
+  const review = await $.tool.call({ tool: 'mcp__foundry__review_record', perspective: 'security', reviewer: 'r', verdict: 'ready', summary: 's' })
+  expect(review.deny).toContain('State edited outside Foundry')
+})
+
+test('writes still failing are not retried over a takeover at a revision between them', async ($, on) => {
+  const { hub } = engine(on)
+  await $.session.start({ cwd: '/repo', surface: 'desktop', isInteractive: true })
+  await $.tool.call({ tool: 'mcp__foundry__batch_start', title: 'T', issues: [12] })
+  // Two revisions of this session's never reach GitHub: its copy runs two ahead.
+  for (const perspective of ['security', 'usability']) {
+    hub.failOnce(/-X PATCH .*issues\/comments\//)
+    await $.tool.call({ tool: 'mcp__foundry__review_record', perspective, reviewer: 'r', verdict: 'ready', summary: 's' })
+  }
+
+  // Another session takes over from GitHub's copy, one revision on: behind this session's copy.
+  rewriteState(hub, 1, body => body.replace('"owner":"session-1"', '"owner":"session-2"').replace(/"title":"[^"]*"/, '"title":"Taken over"'))
+  await $.command.run({ command: 'foundry', args: 'sync', origin: { kind: 'composer' }, presentation: SHOWN })
+
+  expect(hub.state(12)?.owner).toBe('session-2')
+  expect(hub.state(12)?.title).toBe('Taken over')
+  expect(hub.state(12)?.waiting).toBeUndefined()
+  const review = await $.tool.call({ tool: 'mcp__foundry__review_record', perspective: 'architecture', reviewer: 'r', verdict: 'ready', summary: 's' })
+  expect(review.deny).toContain('runs no Foundry batch')
+})
+
+test("this session's own takeover whose write failed is retried, though GitHub still names the owner it took over from", async ($, on) => {
+  const { hub } = engine(on)
+  await $.session.start({ cwd: '/repo', surface: 'desktop', isInteractive: true })
+  await $.tool.call({ tool: 'mcp__foundry__batch_start', title: 'T', issues: [12] })
+  // Another session takes the batch, and this session's sync accepts that.
+  rewriteState(hub, 1, body => body.replace('"owner":"session-1"', '"owner":"session-2"'))
+  await $.command.run({ command: 'foundry', args: 'sync', origin: { kind: 'composer' }, presentation: SHOWN })
+
+  // This session takes it back, but that write fails.
+  hub.failOnce(/-X PATCH .*issues\/comments\//)
+  await $.tool.call({ tool: 'mcp__foundry__batch_start', title: 'T', issues: [12] })
+  expect(hub.state(12)?.owner).toBe('session-2')
+  await $.command.run({ command: 'foundry', args: 'sync', origin: { kind: 'composer' }, presentation: SHOWN })
+
+  expect(hub.state(12)?.owner).toBe('session-1')
+  expect(hub.state(12)?.waiting).toBeUndefined()
+})
+
+test('an outside edit to a batch another session runs is left to that session to restore', async ($, on) => {
+  const { hub } = engine(on)
+  await $.session.start({ cwd: '/repo', surface: 'desktop', isInteractive: true })
+  await $.tool.call({ tool: 'mcp__foundry__batch_start', title: 'T', issues: [12] })
+  rewriteState(hub, 1, body => body.replace('"owner":"session-1"', '"owner":"session-2"'))
+  await $.command.run({ command: 'foundry', args: 'sync', origin: { kind: 'composer' }, presentation: SHOWN })
+  const patches = () => hub.calls.filter(c => c.includes('-X PATCH')).length
+  const before = patches()
+
+  // Someone flips the stage by hand: session-2 runs the batch, so this session writes nothing.
+  rewriteState(hub, 0, body => body.replace('"stage":"plan"', '"stage":"ship"'))
+  await $.command.run({ command: 'foundry', args: 'sync', origin: { kind: 'composer' }, presentation: SHOWN })
+
+  expect(patches()).toBe(before)
+})
+
 test('a write that does not reach GitHub is reported and retried at the next sync', async ($, on) => {
   const { hub } = engine(on)
   await $.session.start({ cwd: '/repo', surface: 'desktop', isInteractive: true })

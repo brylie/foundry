@@ -162,7 +162,12 @@ export type Batch = {
 export type Meta = {
   /** The key (`owner/repo#lead`) of the batch this session runs. */
   mine: string | null
-  /** The state JSON this session last wrote, per batch, to spot edits made around the mod. */
+  /**
+   * Per batch, the last state JSON this session and GitHub agreed on: one it
+   * wrote, or GitHub's copy it took. Its own copy grows from it, so a change
+   * on GitHub at no newer revision is an edit made around the mod, and one at
+   * a newer revision is another session's write.
+   */
   written: Record<string, string>
   /** The `n` of the last log line of each batch this session delivered to the agent. */
   delivered: Record<string, number>

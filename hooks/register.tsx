@@ -44,7 +44,7 @@ import {
 } from './model'
 import type { Decision, Move, Settings } from './model'
 import { readShip } from './ship'
-import { fingerprint } from './state'
+import { fingerprint, revisionOf } from './state'
 
 const PANE = 'foundry'
 const COMMAND = 'foundry'
@@ -327,12 +327,14 @@ async function unsaved($: EngineInterface, key: string): Promise<string> {
 /**
  * Reads every open batch from GitHub and merges it with this session's copy.
  *
- * - A batch this session wrote whose comment changed without a newer
- *   revision, moved to another comment, or vanished, is restored from this
- *   session's copy and flagged to the person.
+ * - A batch this session runs whose comment changed without a revision
+ *   newer than the base (the last copy this session and GitHub agreed on),
+ *   moved to another comment, or vanished, is restored from this session's
+ *   copy and flagged to the person.
  * - A write of this session's that did not land is tried again, unless
- *   GitHub already holds a newer revision from elsewhere.
+ *   GitHub already holds a newer revision from elsewhere, or a takeover.
  * - A batch another session took over stops being this session's.
+ * - GitHub's copy, once taken, is the base for the next sync.
  *
  * It never wakes the agent: callers deliver what is pending in their own way.
  */
@@ -355,22 +357,25 @@ async function sync($: EngineInterface): Promise<{ error?: string }> {
   const restore: Batch[] = []
   const retry: Batch[] = []
   const superseded: string[] = []
+  const accepted: Batch[] = []
 
   for (const theirs of remote) {
     const key = batchKey(theirs)
     const ours = local.find(b => batchKey(b) === key)
-    const wrote = meta.written[key]
-    // Only the batch's owner, by its own copy and by GitHub's, restores it. A session that wrote
-    // it once (before a takeover, or by a press) takes the owner's copy as it is.
-    const isOwned = ours?.owner === self && theirs.owner === self
-    const isMoved = isOwned && ours.commentId !== undefined && theirs.commentId !== ours.commentId
-    // GitHub holds exactly this session's copy: nothing changed it, whatever this session last
-    // recorded writing. A sync that reads a write of its own between the comment and the labels,
-    // before the write is recorded, lands here.
-    const isCurrent = ours !== undefined && fingerprint(theirs) === fingerprint(ours)
+    // The base: the last copy this session and GitHub agreed on, which its own copy grows from.
+    const base = meta.written[key]
+    const baseRev = base === undefined ? undefined : revisionOf(base)
     // GitHub holds exactly this session's latest copy: a write whose comment landed and whose labels did not.
-    const isOursPending = isCurrent && meta.errors[key] !== undefined
-    const isEdited = isOwned && wrote !== undefined && theirs.rev <= ours.rev && fingerprint(theirs) !== wrote && !isCurrent
+    const isOursPending = ours !== undefined && meta.errors[key] !== undefined && fingerprint(theirs) === fingerprint(ours)
+    // Only the session that runs the batch restores it. A change on GitHub at no newer revision
+    // than the base is an edit made around the mod, whatever it changed, the owner included. A
+    // write of this session's own always has a newer one, even read before it is recorded.
+    const isRunning = ours?.owner === self
+    const isEdited = isRunning && baseRev !== undefined && theirs.rev <= baseRev && fingerprint(theirs) !== base
+    const isMoved = isRunning && ours.commentId !== undefined && theirs.commentId !== ours.commentId
+    // Another session's write past the base that names another owner: a takeover. It stands, even
+    // over a copy of this session's that ran ahead on writes that never landed.
+    const isTakenOver = isRunning && baseRev !== undefined && theirs.rev > baseRev && theirs.owner !== self
     if (ours !== undefined && isOursPending) {
       // Finish that write: the comment is there, so it is rewritten in place and the labels set again.
       const finished = { ...ours, commentId: theirs.commentId }
@@ -379,13 +384,15 @@ async function sync($: EngineInterface): Promise<{ error?: string }> {
     } else if (ours !== undefined && (isEdited || isMoved)) {
       restore.push(ours)
       merged.push(ours)
-    } else if (ours !== undefined && ours.rev > theirs.rev) {
+    } else if (ours !== undefined && ours.rev > theirs.rev && !isTakenOver) {
       merged.push(ours)
       if (meta.errors[key] !== undefined) retry.push(ours)
     } else {
-      // GitHub's is as new or newer: a pending write of ours is superseded by it.
+      // GitHub's is as new or newer, or a takeover: a pending write of ours is superseded by it,
+      // and GitHub's copy becomes the base.
       if (ours !== undefined && meta.errors[key] !== undefined) superseded.push(key)
       merged.push(theirs)
+      accepted.push(theirs)
     }
   }
   for (const ours of local) {
@@ -414,8 +421,15 @@ async function sync($: EngineInterface): Promise<{ error?: string }> {
   await update($, metaAtom, m => {
     const errors = Object.fromEntries(Object.entries(m.errors).filter(([key]) => !superseded.includes(key)))
     const taken = m.mine !== null && merged.some(b => batchKey(b) === m.mine && b.owner !== self)
+    // A write this session recorded while GitHub was being read is newer than what was read: it stays the base.
+    const written = { ...m.written }
+    for (const b of accepted) {
+      const key = batchKey(b)
+      const recorded = written[key]
+      if (recorded === undefined || revisionOf(recorded) <= b.rev) written[key] = fingerprint(b)
+    }
 
-    return { ...m, errors, mine: taken ? null : m.mine, syncedAt: now }
+    return { ...m, errors, written, mine: taken ? null : m.mine, syncedAt: now }
   })
   for (const batch of restore) {
     const flagged: Batch =
