@@ -48,23 +48,33 @@ Each stage has a round limit, and reaching it escalates to you. You always merge
 
 ### Install
 
-In Claude Code:
+Foundry comes from its own marketplace, `brylie/foundry`: add the marketplace once, then install the plugin from it. In a Claude Code session:
 
 ```
-/plugin install foundry --marketplace brylie/foundry
+/plugin marketplace add brylie/foundry
 ```
 
-From a shell:
+```
+/plugin install foundry@foundry
+```
+
+From a shell, the same two steps:
 
 ```bash
-claude plugin install foundry --marketplace brylie/foundry
+claude plugin marketplace add brylie/foundry
 ```
 
-In the Claude desktop app, click **+** next to the prompt box, choose **Plugins**, add the marketplace `brylie/foundry`, then add Foundry.
+```bash
+claude plugin install foundry@foundry
+```
+
+In the Claude desktop app, click **+** next to the prompt box and choose **Add plugins** (or **Plugins**, then **Browse plugins**), add the marketplace `brylie/foundry`, then add Foundry.
 
 ### Upgrade
 
-Fetch the latest Foundry, then update the plugin:
+**In a Claude Code session,** run `/plugin`, open the **Installed** tab, choose Foundry, then **Update now**. Or update from the marketplace: run `/plugin marketplace update foundry`, then choose **Update marketplace**, which refreshes the listing and updates the plugins you installed from it.
+
+**From a shell:**
 
 ```bash
 claude plugin marketplace update foundry
@@ -74,7 +84,11 @@ claude plugin marketplace update foundry
 claude plugin update foundry@foundry
 ```
 
-Restart Claude Code, or start a new session, to load the new version. `claude plugin list` shows the version you have.
+The new version loads in your next session, or in the running one after `/reload-plugins`. `claude plugin list` shows the version you have.
+
+**To update on its own,** turn on auto-update for the marketplace: in `/plugin`, open **Marketplaces**, choose `foundry`, then **Enable auto-update**. It's off by default for marketplaces outside Anthropic's own. Claude Code then updates Foundry in the background and tells you to run `/reload-plugins`.
+
+**In the Claude desktop app,** the Code tab's plugin menu installs, enables and removes plugins, but has no documented update action. Update from a Claude Code session or a shell as above, or turn on auto-update.
 
 Batches already running carry on: Foundry reads the state an earlier version wrote, keeping each batch's stage, reviews and any decision waiting on you. Before you upgrade, read the release's **Changed** and **Upgrading** notes in the [changelog](CHANGELOG.md). For 0.3.0, for example, remove `bot_timeout_minutes` from your `foundry.yaml`, since Foundry no longer reads it.
 
