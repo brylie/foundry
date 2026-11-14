@@ -9,6 +9,7 @@ Foundry's notable changes, newest first. Versions follow [Semantic Versioning](h
   - A session that wrote a batch before it was taken over kept comparing the new owner's state with its own last write, and flagged it after every one of the owner's writes.
   - A session whose write had failed restored its copy over another session's takeover.
   - A session whose writes were failing retried them over another session's takeover.
+  - A takeover posted as a new comment, because the old one was gone, read as a moved comment: the session restored its copy, in a second state comment.
 
   Now each session compares GitHub with the last copy it and GitHub agreed on, not with its own last write. A change at no newer revision is an outside edit, even one that only renames the owner, and only the session that runs the batch restores it. A change at a newer revision that names another owner is a takeover, and stands. A batch that shows the alert from before keeps it until you acknowledge it.
 - **Documentation reorganized.** The README is now a short introduction and quick start. The details moved to guides in `docs/`: [How it works](docs/how-it-works.md), [Configuration](docs/configuration.md), [Reference](docs/reference.md) and [Security model](docs/security.md). A new [CONTRIBUTING.md](CONTRIBUTING.md) covers development.

@@ -372,18 +372,21 @@ async function sync($: EngineInterface): Promise<{ error?: string }> {
     // write of this session's own always has a newer one, even read before it is recorded.
     const isRunning = ours?.owner === self
     const isEdited = isRunning && baseRev !== undefined && theirs.rev <= baseRev && fingerprint(theirs) !== base
-    const isMoved = isRunning && ours.commentId !== undefined && theirs.commentId !== ours.commentId
     // Another session's write past the base that names another owner: a takeover. It stands, even
-    // over a copy of this session's that ran ahead on writes that never landed.
+    // over a copy of this session's that ran ahead on writes that never landed, and even in a
+    // comment of its own, posted because the old one was gone.
     const isTakenOver = isRunning && baseRev !== undefined && theirs.rev > baseRev && theirs.owner !== self
+    const isMoved = isRunning && !isTakenOver && ours.commentId !== undefined && theirs.commentId !== ours.commentId
     if (ours !== undefined && isOursPending) {
       // Finish that write: the comment is there, so it is rewritten in place and the labels set again.
       const finished = { ...ours, commentId: theirs.commentId }
       merged.push(finished)
       retry.push(finished)
     } else if (ours !== undefined && (isEdited || isMoved)) {
-      restore.push(ours)
-      merged.push(ours)
+      // Restored into the comment GitHub shows now, so the issue keeps one state comment.
+      const restored = { ...ours, commentId: theirs.commentId }
+      restore.push(restored)
+      merged.push(restored)
     } else if (ours !== undefined && ours.rev > theirs.rev && !isTakenOver) {
       merged.push(ours)
       if (meta.errors[key] !== undefined) retry.push(ours)

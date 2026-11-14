@@ -26,6 +26,8 @@ const HEAD = 'feedbeef00'
 /** The account the mod's `gh` is signed in as. */
 const WRITER = 'maintainer'
 
+class NotFound extends Error {}
+
 /** A pretend GitHub behind `gh`: comments and labels per issue, and one pull request. */
 function github() {
   const comments = new Map<number, { id: number; body: string; user: string }[]>()
@@ -61,7 +63,12 @@ function github() {
       return config === undefined ? { stdout: '', stderr: 'gh: Not Found (HTTP 404)', exitCode: 1 } : { stdout: config, stderr: '', exitCode: 0 }
     }
 
-    return { stdout: answer(argv, stdin), stderr: '', exitCode: 0 }
+    try {
+      return { stdout: answer(argv, stdin), stderr: '', exitCode: 0 }
+    } catch (error) {
+      if (error instanceof NotFound) return { stdout: '', stderr: 'gh: Not Found (HTTP 404)', exitCode: 1 }
+      throw error
+    }
   }
 
   function answer(argv: readonly string[], stdin?: string): string {
@@ -89,7 +96,10 @@ function github() {
     }
     if (/issues\/comments\/\d+/.test(path)) {
       const id = Number(/comments\/(\d+)/.exec(path)?.[1])
-      for (const list of comments.values()) for (const c of list) if (c.id === id) c.body = (JSON.parse(stdin ?? '{}') as { body: string }).body
+      const found = [...comments.values()].flat().find(c => c.id === id)
+      // A comment that is gone answers 404, as GitHub does.
+      if (found === undefined) throw new NotFound()
+      found.body = (JSON.parse(stdin ?? '{}') as { body: string }).body
 
       return '{}'
     }
@@ -481,6 +491,46 @@ test("this session's own takeover whose write failed is retried, though GitHub s
 
   expect(hub.state(12)?.owner).toBe('session-1')
   expect(hub.state(12)?.waiting).toBeUndefined()
+})
+
+/** Deletes #12's state comment and posts `edit` of it afresh, as the mod's own account: a new comment id. */
+function repostState(hub: ReturnType<typeof engine>['hub'], bump: number, edit: (body: string) => string) {
+  const old = hub.comments.get(12)?.[0]?.body ?? ''
+  hub.comments.set(12, [])
+  hub.post(12, edit(old).replace(/"rev":(\d+)/, (_, n) => `"rev":${Number(n) + bump}`), WRITER)
+}
+
+test('a state comment deleted and posted again, with nothing newer, is restored and flagged', async ($, on) => {
+  const { hub } = engine(on)
+  await $.session.start({ cwd: '/repo', surface: 'desktop', isInteractive: true })
+  await $.tool.call({ tool: 'mcp__foundry__batch_start', title: 'T', issues: [12] })
+
+  repostState(hub, 0, body => body.replace('"stage":"plan"', '"stage":"ship"'))
+  await $.command.run({ command: 'foundry', args: 'sync', origin: { kind: 'composer' }, presentation: SHOWN })
+
+  // Restored into the comment that is there, not posted beside it.
+  expect((hub.comments.get(12) ?? []).filter(c => c.body.includes('foundry:state')).length).toBe(1)
+  expect(hub.state(12)?.stage).toBe('plan')
+  expect(hub.state(12)?.waiting?.kind).toBe('tamper')
+})
+
+test('a takeover posted as a new comment stands, even over a write of this session that failed', async ($, on) => {
+  const { hub } = engine(on)
+  await $.session.start({ cwd: '/repo', surface: 'desktop', isInteractive: true })
+  await $.tool.call({ tool: 'mcp__foundry__batch_start', title: 'T', issues: [12] })
+  hub.failOnce(/-X PATCH .*issues\/comments\//)
+  await $.tool.call({ tool: 'mcp__foundry__review_record', perspective: 'security', reviewer: 'r', verdict: 'ready', summary: 's' })
+
+  // The comment is gone; another session takes over, one revision past GitHub's, in a comment of its own.
+  repostState(hub, 1, body => body.replace('"owner":"session-1"', '"owner":"session-2"').replace(/"title":"[^"]*"/, '"title":"Taken over"'))
+  await $.command.run({ command: 'foundry', args: 'sync', origin: { kind: 'composer' }, presentation: SHOWN })
+
+  const states = (hub.comments.get(12) ?? []).filter(c => c.body.includes('foundry:state'))
+  expect(states.length).toBe(1)
+  expect(hub.state(12)?.owner).toBe('session-2')
+  expect(hub.state(12)?.title).toBe('Taken over')
+  const review = await $.tool.call({ tool: 'mcp__foundry__review_record', perspective: 'usability', reviewer: 'r', verdict: 'ready', summary: 's' })
+  expect(review.deny).toContain('runs no Foundry batch')
 })
 
 test('an outside edit to a batch another session runs is left to that session to restore', async ($, on) => {
