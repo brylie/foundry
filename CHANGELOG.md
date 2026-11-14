@@ -4,6 +4,7 @@ Foundry's notable changes, newest first. Versions follow [Semantic Versioning](h
 
 ## Unreleased
 
+- **A change that waits its turn no longer undoes the one before it.** Changes to a batch run one at a time, but each read the batch as it stood when its press, command, tool call or poll began. One that waited behind another's GitHub write could decide on the older copy and save over the newer change: with three reviews recorded at once, the middle one was reported as recorded, then lost. Each change now reads the batch as it stands when its turn comes.
 - **No more false "changed outside the mod" alerts.** A sync flagged an outside edit, and wrote its own copy back, in cases where nothing outside had changed:
   - It read the session's own write between the comment and the labels.
   - A session that wrote a batch before it was taken over kept comparing the new owner's state with its own last write, and flagged it after every one of the owner's writes.
