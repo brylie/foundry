@@ -19,7 +19,6 @@ import {
   NO_DOCS,
   TRACK,
   VERDICTS,
-  WAIT_LABEL,
   batchKey,
   choices,
   currentRound,
@@ -46,6 +45,8 @@ import {
   requestSignoff,
   sendBack,
   trackIndex,
+  waitedFor,
+  waitLabel,
 } from './model'
 import type { Decision, Move, Settings } from './model'
 import { readShip } from './ship'
@@ -72,6 +73,8 @@ const PERSON_ORIGINS = new Set(['composer', 'bridge', 'sdk'])
 const VERDICT_MARK: Record<Verdict, string> = { ready: '✓', revise: '~', rethink: '✗' }
 const VERDICT_COLOR: Record<Verdict, string> = { ready: 'success', revise: 'warning', rethink: 'error' }
 const LIGHT_MARK: Record<Light, string> = { pass: '✓', fail: '✗', pending: '…', none: '—' }
+/** Each light's state in words, beside its mark and colour, so neither carries it alone. */
+const LIGHT_WORD: Record<Light, string> = { pass: 'pass', fail: 'fail', pending: 'pending', none: 'not run' }
 const LIGHT_COLOR: Record<Light, string> = { pass: 'success', fail: 'error', pending: 'warning', none: 'subtle' }
 
 // The engine hands settings over as the person typed them, so a number may arrive as a string.
@@ -241,6 +244,26 @@ async function save($: EngineInterface, batch: Batch): Promise<Batch> {
   return saved
 }
 
+/**
+ * A batch's wait changed: a wait that began is told to the person wherever
+ * they are, and a wait that ended takes its notification back. Only the
+ * session that runs the batch notifies, so a wait reaches the person once.
+ */
+async function waitChanged($: EngineInterface, before: Batch, after: Batch, isNew: boolean): Promise<void> {
+  const was = waitIdentity(before)
+  if (was !== undefined && waitIdentity(after) !== was) void $.ui.cancelNotify(was).catch(() => undefined)
+  if (!isNew || after.waiting === undefined) return
+  const text = `Foundry: "${after.title}" (#${after.lead}) is waiting on you: ${waitLabel(after)}.`
+  // Long enough to read, and kept in the transcript besides.
+  $.ui.toast(text, { timeoutMs: 15_000 })
+  $.ui.log(text)
+  const key = waitIdentity(after)
+  if (key === undefined || after.owner !== (await $.session.id())) return
+  void $.ui.notify(text, { title: 'Foundry', key }).catch(() => undefined)
+  // Where a panel shows, it opens to the card that waits.
+  void openPane($).catch(() => false)
+}
+
 /** Runs a move on a batch and keeps what it changed, a refused move's escalation included. */
 async function apply($: EngineInterface, key: string, move: (batch: Batch) => Move): Promise<Move | undefined> {
   return exclusive($, key, async batch => {
@@ -250,9 +273,7 @@ async function apply($: EngineInterface, key: string, move: (batch: Batch) => Mo
 
     const before = batch.waiting
     const saved = await save($, result.batch)
-    if (saved.waiting !== undefined && saved.waiting !== before) {
-      $.ui.toast(`Foundry: waiting on you: ${WAIT_LABEL[saved.waiting.kind]}`)
-    }
+    await waitChanged($, batch, saved, saved.waiting !== undefined && saved.waiting !== before)
 
     return { ...result, batch: saved }
   })
@@ -570,16 +591,16 @@ async function pollShip($: EngineInterface): Promise<void> {
     if (!isUnchanged(batch, now)) return
     const before = batch.waiting?.kind
     const saved = await save($, next)
-    if (saved.waiting !== undefined && saved.waiting.kind !== before) $.ui.toast(`Foundry: waiting on you: ${WAIT_LABEL[saved.waiting.kind]}`)
+    await waitChanged($, now, saved, saved.waiting !== undefined && saved.waiting.kind !== before)
   })
 }
 
 function statusText(batch: Batch | undefined): string | undefined {
   if (batch === undefined) return undefined
-  if (batch.stage === 'done') return `foundry: ${batch.title} done`
-  if (batch.waiting) return `foundry: waiting on you: ${WAIT_LABEL[batch.waiting.kind]}`
+  if (batch.stage === 'done') return `Foundry: ${batch.title} is done`
+  if (batch.waiting) return `Foundry: waiting on you: ${waitLabel(batch)} (#${batch.lead})`
 
-  return `foundry: ${TRACK[trackIndex(batch)]} · round ${currentRound(batch)}/${batch.maxRounds}`
+  return `Foundry: ${TRACK[trackIndex(batch)]} · round ${currentRound(batch)} of ${batch.maxRounds} (#${batch.lead})`
 }
 
 async function show($: EngineInterface): Promise<void> {
@@ -644,7 +665,7 @@ function describe(batch: Batch): string {
     `Plan: ${planPath(batch)}. Write the full plan there and revise it there: the person reads it on the batch's card, and Foundry copies it to the lead issue${batch.planCopy ? ` (${batch.planCopy.url})` : ''} at each review and sign-off. It is committed with the agreed docs.`,
   ]
   if (batch.waiting) {
-    lines.push(`WAITING ON THE PERSON: ${WAIT_LABEL[batch.waiting.kind]}. ${batch.waiting.summary}`, `They decide ${howToDecide(batch)}`)
+    lines.push(`WAITING ON THE PERSON: ${waitLabel(batch)}. ${batch.waiting.summary}`, `They decide ${howToDecide(batch)}`)
   }
   if (isLoopStage(batch.stage)) {
     for (const p of perspectiveStates(batch)) {
@@ -717,6 +738,20 @@ async function pressDecide($: EngineInterface, key: string, decision: Decision, 
  * head commit, and when it began; undefined when nothing waits. The head is in
  * it because a push can bring a wait of the same kind, keeping its start.
  */
+/** The card's key for a decision's button: the same keys the panel always used, so a press finds it. */
+function decisionKey(decision: Decision): string {
+  switch (decision.action) {
+    case 'veto':
+      return `veto-${decision.perspective}`
+    case 'acknowledge':
+      return 'ack'
+    case 'end':
+      return 'end-now'
+    default:
+      return decision.action
+  }
+}
+
 function waitIdentity(batch: Batch): string | undefined {
   const w = batch.waiting
 
@@ -754,7 +789,7 @@ async function askPerson($: EngineInterface, preface = ''): Promise<void> {
   const hint = words === 'changes' ? ' Or write what to change under Other.' : words === 'compromise' ? ' Or write the compromise under Other.' : ''
   const typed = options.map(o => `\`${o.typed}\``).join(', ')
   const plan = batch.planCopy ? `\n\nThe plan: ${batch.planCopy.url}` : ''
-  const question = `${preface}Foundry, "${batch.title}" (#${batch.lead}): ${WAIT_LABEL[waiting.kind]}.\n\n${waiting.summary}${plan}\n\nWhat do you decide?${hint} You can also type ${typed}.`
+  const question = `${preface}Foundry, "${batch.title}" (#${batch.lead}): ${waitLabel(batch)}.\n\n${waiting.summary}${plan}\n\nWhat do you decide?${hint} You can also type ${typed}.`
   let answer: string
   try {
     answer = await $.ui.ask(question, { options: choices.map(c => c.label), header: 'Foundry' })
@@ -873,8 +908,30 @@ async function clearCard($: EngineInterface, key: string): Promise<void> {
   await releaseIfMine($, key)
 }
 
-async function openPane($: EngineInterface): Promise<void> {
-  await $.ui.open({ id: PANE, title: 'Foundry' })
+/** Opens the panel; false where no panel shows (the mobile app places none). */
+async function openPane($: EngineInterface): Promise<boolean> {
+  const opened = await $.ui.open({ id: PANE, title: 'Foundry' })
+
+  return opened.isPlaced
+}
+
+/** What the person types, read kindly: any case, and the words people reach for. */
+const VERB_ALIASES: Record<string, string> = {
+  ok: 'ack',
+  acknowledge: 'ack',
+  overrule: 'veto',
+  'request-changes': 'changes',
+  'send-back': 'changes',
+  'another-round': 'changes',
+  'keep-waiting': 'wait',
+}
+
+/** The other open batches, a line each, marking those that wait on the person. */
+function otherBatches(all: Batch[], own: Batch | undefined): string[] {
+  const others = all.filter(b => isActive(b) && (own === undefined || batchKey(b) !== batchKey(own)))
+  if (others.length === 0) return []
+
+  return ['', 'Other open batches:', ...others.map(b => `- #${b.lead} ${b.title}: ${b.waiting ? `waiting on you (${waitLabel(b)})` : TRACK[trackIndex(b)]}`)]
 }
 
 // -------------------------------------------------------------------------
@@ -887,8 +944,8 @@ export const register: Register = (on, options) => {
   on('session.start', async ($, e, next) => {
     await $.command.register({
       name: COMMAND,
-      description: 'Foundry: status, approve, changes, veto <reviewer>, compromise, ack, end, sync, pane',
-      argumentHint: '[status | approve | changes | veto <reviewer> | compromise | ack | end | sync | pane] [#lead]',
+      description: 'Foundry: status, plan, approve, changes, veto <reviewer>, compromise, ack, end, sync, pane',
+      argumentHint: '[status | plan | approve | changes | veto <reviewer> | compromise | ack | end | sync | pane] [#lead]',
     })
 
     const tools: { name: string; description: string; properties: Record<string, unknown>; required: string[] }[] = [
@@ -1272,13 +1329,16 @@ export const register: Register = (on, options) => {
   on('command.run', { command: COMMAND }, async ($, e) => {
     const words = e.args.trim().split(/\s+/).filter(Boolean)
     const target = words.find(w => /^#\d+$/.test(w))
-    const [verb = 'status', ...rest] = words.filter(w => w !== target)
+    const [typedVerb = 'status', ...rest] = words.filter(w => w !== target)
+    const verb = VERB_ALIASES[typedVerb.toLowerCase()] ?? typedVerb.toLowerCase()
     const arg = rest[0]
 
     if (verb === 'pane') {
-      await openPane($)
-
-      return { text: 'Foundry pane opened.' }
+      return {
+        text: (await openPane($))
+          ? 'Foundry pane opened.'
+          : 'The Foundry panel shows on the desktop app and in the terminal, not here. Use `/foundry status` and `/foundry plan`, and answer the questions Foundry asks.',
+      }
     }
     if (verb === 'sync') {
       const report = await syncReport($, await sync($))
@@ -1290,7 +1350,19 @@ export const register: Register = (on, options) => {
     const all = await read($, batchesAtom)
     const own = await mine($)
     const batch = target ? all.find(b => b.lead === Number(target.slice(1)) && (own === undefined || b.repo === own.repo)) : own
-    if (verb === 'status') return { text: batch ? describe(batch) : 'No Foundry batch here. Open the pane with /foundry pane to see every batch.' }
+    if (verb === 'status') {
+      const lines = [batch ? describe(batch) : 'This session runs no Foundry batch. Name one by its lead issue, e.g. `/foundry status #45`.', ...otherBatches(all, batch)]
+      if (batch?.waiting) lines.unshift(`Waiting on you: ${waitLabel(batch)}. Type ${decisionOptions(batch).map(o => `\`${o.typed}\``).join(', ')}.`, '')
+
+      return { text: lines.join('\n') }
+    }
+    if (verb === 'plan') {
+      if (batch === undefined) return { text: 'No Foundry batch here. Name one by its lead issue, e.g. `/foundry plan #45`.' }
+      const text = await planText($, batch)
+      const link = batch.planCopy ? `On GitHub: ${batch.planCopy.url}\n\n` : ''
+
+      return { text: text === undefined ? `${link}No plan in this checkout yet at \`${planPath(batch)}\`.` : `${link}${text}` }
+    }
     if (!PERSON_ORIGINS.has(e.origin.kind)) return { text: 'Foundry: sign-offs come only from the person at the prompt.' }
     if (batch === undefined) return { text: 'No Foundry batch to act on. Name one by its lead issue, e.g. /foundry approve #45.' }
 
@@ -1314,7 +1386,7 @@ export const register: Register = (on, options) => {
                       ? { action: 'end' }
                       : undefined
     if (decision === undefined) {
-      return { text: 'Usage: /foundry [status | approve | changes | veto <reviewer> | compromise | ack | end | sync | pane] [#lead]' }
+      return { text: 'Usage: /foundry [status | plan | approve | changes [what to change] | veto <reviewer> | compromise [the compromise] | ack | end | sync | pane] [#lead]' }
     }
 
     // Ending stops the gates for good, so it takes a second word, typed on purpose.
@@ -1329,7 +1401,14 @@ export const register: Register = (on, options) => {
     const key = batchKey(batch)
     const now = await $.clock.now()
     const result = await apply($, key, b => withWords(decide(b, decision, now), said, now))
-    if (result?.error) return { text: result.error }
+    if (result?.error) {
+      // Say what does apply now, so the next try is the right one.
+      const now = await current($, key)
+      const options = now?.waiting ? decisionOptions(now) : []
+      const hint = options.length > 0 ? ` #${batch.lead} is waiting on ${waitLabel(now ?? batch)}: type ${options.map(o => `\`${o.typed}\``).join(', ')}.` : ''
+
+      return { text: `${result.error}${hint}` }
+    }
     if (decision.action === 'end') await releaseIfMine($, key)
     // A command's context waits for the agent's next turn, and may start none: the agent is woken,
     // as a press wakes it, once the command is done (a command may not submit a prompt while it runs).
@@ -1364,6 +1443,9 @@ export const register: Register = (on, options) => {
     const plans = new Map(
       await Promise.all(batches.filter(b => shown.includes(batchKey(b))).map(async b => [batchKey(b), await planText($, b)] as const)),
     )
+    const now = await $.clock.now()
+    // The keyboard starts on this session's first decision, once the person moves into the panel.
+    const focusOn = sorted.find(b => batchKey(b) === meta.mine && b.waiting !== undefined)
 
     return (
       <Box flexDirection="column">
@@ -1388,6 +1470,30 @@ export const register: Register = (on, options) => {
               <Text dimColor>
                 {batch.issues.map(n => `#${n}`).join(' ')} · {meta.mine === key ? 'this session' : 'another session'}
               </Text>
+
+              {/* What the person is asked comes first: the request, how long it has waited, the choices, then the detail. */}
+              {waiting !== undefined && (
+                <Box flexDirection="column" borderStyle="bold" borderColor="warning" paddingX={1} marginTop={1}>
+                  <Text weight="semibold" color="warning">
+                    ⚠ Waiting on you: {waitLabel(batch)} · {waitedFor(waiting.at, now)}
+                  </Text>
+                  <Box flexDirection="row" flexWrap="wrap" gap={1}>
+                    {decisionOptions(batch).map((o, i) => (
+                      <Button
+                        key={`${id}-${decisionKey(o.decision)}`}
+                        label={`${o.label}: ${batch.title}`}
+                        variant={o.decision.action === 'approve' ? 'primary' : undefined}
+                        {...(focusOn === batch && i === 0 ? { autoFocus: true as const } : {})}
+                        onPress={press($, () => (o.decision.action === 'end' ? askToEnd($, key, true) : pressDecide($, key, o.decision)))}
+                      >
+                        {o.decision.action === 'end' ? `${o.label}…` : o.label}
+                      </Button>
+                    ))}
+                  </Box>
+                  <Markdown text={waiting.summary} />
+                </Box>
+              )}
+
               <Box flexDirection="row" flexWrap="wrap" columnGap={1}>
                 {TRACK.map((step, i) => (
                   <Text color={i === at ? 'claude' : i < at ? 'success' : 'subtle'} weight={i === at ? 'semibold' : undefined}>
@@ -1395,82 +1501,51 @@ export const register: Register = (on, options) => {
                   </Text>
                 ))}
               </Box>
-              {batch.stage !== 'done' && (
-                <Text dimColor>
-                  Round {currentRound(batch)} of {batch.maxRounds}
-                </Text>
-              )}
+              {/* The track in words, for anyone the glyphs don't reach. */}
+              <Text>
+                Now: {TRACK[at]}, stage {at + 1} of {TRACK.length}
+                {batch.stage === 'done' ? '' : `, round ${currentRound(batch)} of ${batch.maxRounds}`}
+              </Text>
 
               {isLoopStage(batch.stage) && (
                 <Box flexDirection="row" flexWrap="wrap" columnGap={2}>
                   {perspectiveStates(batch).map(p => (
                     <Text color={p.isVetoed || !p.latest ? 'subtle' : VERDICT_COLOR[p.latest.verdict]}>
-                      {p.isVetoed ? '⊘' : p.latest ? VERDICT_MARK[p.latest.verdict] : '○'} {p.perspective}
+                      {p.isVetoed ? '⊘' : p.latest ? VERDICT_MARK[p.latest.verdict] : '○'} {p.perspective}{' '}
+                      {p.isVetoed ? 'vetoed' : p.latest ? p.latest.verdict : 'not reviewed'}
                     </Text>
                   ))}
                   {extraReviews(batch).map(r => (
                     <Text dimColor>
-                      {VERDICT_MARK[r.verdict]} {r.perspective} (extra)
+                      {VERDICT_MARK[r.verdict]} {r.perspective} {r.verdict} (extra)
                     </Text>
                   ))}
                 </Box>
               )}
 
-              <Box flexDirection="row" flexWrap="wrap" columnGap={2}>
-                <Text color={LIGHT_COLOR[batch.tests?.light ?? 'none']}>{LIGHT_MARK[batch.tests?.light ?? 'none']} Tests</Text>
-                <Text color={LIGHT_COLOR[ship?.ci ?? 'none']}>{LIGHT_MARK[ship?.ci ?? 'none']} CI</Text>
-                {ship !== undefined && ship.openThreads > 0 && (
-                  <Text color="error">
-                    {ship.openThreads} open review thread{ship.openThreads === 1 ? '' : 's'}
+              {(batch.tests !== undefined || ship !== undefined) && (
+                <Box flexDirection="row" flexWrap="wrap" columnGap={2}>
+                  <Text color={LIGHT_COLOR[batch.tests?.light ?? 'none']}>
+                    {LIGHT_MARK[batch.tests?.light ?? 'none']} Tests {LIGHT_WORD[batch.tests?.light ?? 'none']}
                   </Text>
-                )}
-              </Box>
-              {ship !== undefined && ship.outsiders.length > 0 && (
-                <Text dimColor>Outside the allowlist, not acted on: {ship.outsiders.join(', ')}</Text>
+                  <Text color={LIGHT_COLOR[ship?.ci ?? 'none']}>
+                    {LIGHT_MARK[ship?.ci ?? 'none']} CI {LIGHT_WORD[ship?.ci ?? 'none']}
+                  </Text>
+                  {ship !== undefined && ship.openThreads > 0 && (
+                    <Text color="error">
+                      {ship.openThreads} open review thread{ship.openThreads === 1 ? '' : 's'}
+                    </Text>
+                  )}
+                </Box>
               )}
-              {ship !== undefined && <Link href={ship.url} label={`Pull request #${ship.pr}`} />}
+              {ship !== undefined && ship.outsiders.length > 0 && (
+                <Text color="warning">Outside the allowlist, not acted on: {ship.outsiders.join(', ')}</Text>
+              )}
+              {ship !== undefined && <Link href={ship.url} label={`${batch.stage === 'build' ? 'Draft pull request' : 'Pull request'} #${ship.pr}`} />}
               {ship !== undefined && ship.checks.some(c => c.light === 'fail') && (
                 <Text color="error">
                   Failing: {ship.checks.filter(c => c.light === 'fail').map(c => c.name).join(', ')}
                 </Text>
-              )}
-
-              {waiting !== undefined && (
-                <Box flexDirection="column" borderStyle="bold" borderColor="warning" paddingX={1} marginTop={1}>
-                  <Text weight="semibold" color="warning">
-                    ⚠ Waiting on you: {WAIT_LABEL[waiting.kind]}
-                  </Text>
-                  <Markdown text={waiting.summary} />
-                  <Box flexDirection="row" flexWrap="wrap" gap={1}>
-                    {choices(batch).flatMap(action => {
-                      switch (action) {
-                        case 'approve':
-                          return [
-                            <Button key={`${id}-approve`} label="Approve" variant="primary" onPress={press($, () => pressDecide($, key, { action: 'approve' }))} />,
-                          ]
-                        case 'changes': {
-                          const label = waiting.kind === 'signoff' ? 'Request changes' : batch.stage === 'ship' ? 'Send back anyway' : 'Another round'
-
-                          return [<Button key={`${id}-changes`} label={label} onPress={press($, () => pressDecide($, key, { action: 'changes' }))} />]
-                        }
-                        case 'veto':
-                          return (waiting.perspectives ?? []).map(p => (
-                            <Button key={`${id}-veto-${p}`} label={`Veto ${p}`} onPress={press($, () => pressDecide($, key, { action: 'veto', perspective: p }))} />
-                          ))
-                        case 'compromise':
-                          return [
-                            <Button key={`${id}-compromise`} label="I'll write a compromise" onPress={press($, () => pressDecide($, key, { action: 'compromise' }))} />,
-                          ]
-                        case 'acknowledge':
-                          return [<Button key={`${id}-ack`} label="OK" onPress={press($, () => pressDecide($, key, { action: 'acknowledge' }))} />]
-                        case 'end':
-                          return [<Button key={`${id}-end-now`} label="End batch…" onPress={press($, () => askToEnd($, key, true))} />]
-                        default:
-                          return []
-                      }
-                    })}
-                  </Box>
-                </Box>
               )}
 
               {error !== undefined && <Text color="error">GitHub: {error}</Text>}

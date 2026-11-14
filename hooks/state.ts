@@ -3,7 +3,7 @@
 
 import type { Batch } from '../types'
 import { STATE_MARKER } from './guard'
-import { TRACK, WAIT_LABEL, currentRound, isLoopStage, perspectiveStates, trackIndex } from './model'
+import { TRACK, currentRound, isLoopStage, perspectiveStates, trackIndex, waitLabel } from './model'
 
 export const STATE_VERSION = 1
 
@@ -38,7 +38,7 @@ export function renderState(batch: Batch): string {
     STATE_MARKER,
     `**Foundry** · ${batch.title}`,
     '',
-    `Stage: **${step}**${round}${batch.waiting ? ` · ⚠️ waiting on the maintainer: ${WAIT_LABEL[batch.waiting.kind]}` : ''}`,
+    `Stage: **${step}**${round}${batch.waiting ? ` · ⚠️ waiting on the maintainer: ${waitLabel(batch)}` : ''}`,
     `Issues: ${batch.issues.map(n => `#${n}`).join(', ')}${batch.ship ? ` · Pull request: #${batch.ship.pr}` : ''}`,
   ]
   if (isLoopStage(batch.stage)) {

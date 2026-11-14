@@ -156,6 +156,18 @@ function engine(on: On) {
   const clock = mock.clock(on)
   on('ui.status', () => ({ value: undefined }))
   on('ui.log', () => ({ value: undefined }))
+  /** The person's notifications, as their channel holds them: sent by key, and taken back. */
+  const notes = { sent: [] as { text: string; key?: string }[], taken: [] as string[] }
+  on('ui.notify', (_, e) => {
+    notes.sent.push({ text: e.text, ...(e.key === undefined ? {} : { key: e.key }) })
+
+    return { value: { isSent: true, channel: 'test' } as never }
+  })
+  on('ui.cancelNotify', (_, e) => {
+    notes.taken.push(e.key)
+
+    return { value: { isSent: true } }
+  })
   on('ui.toast', () => ({ value: undefined }))
   on('command.register', (_, e) => ({ value: { command: e.name } }))
   on('tool.register', (_, e) => ({ value: { tool: `mcp__foundry__${e.name}` } }))
@@ -220,7 +232,7 @@ function engine(on: On) {
     return { result: {} }
   })
 
-  return { hub, prompts, ran, submit, clock, gate, asks, files }
+  return { hub, prompts, ran, submit, clock, gate, asks, files, notes }
 }
 
 async function approveAll($: Engine) {
@@ -262,8 +274,9 @@ test('a batch moves through every stage, its state in GitHub, gated by the perso
 
   for (const surface of ['terminal', 'desktop'] as const) {
     const ui = await $.ui.mount({ ...PANE, surface })
-    expect(await ui.find({ type: 'Text', text: /Waiting on you: Sign-off/ })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: /Round 1 of 3/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /Waiting on you: Plan sign-off · just now/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /Now: Plan sign-off, stage 2 of 6, round 1 of 3/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /security ready/ })).toBeDefined()
     await ui.unmount()
   }
 
@@ -461,11 +474,11 @@ test('words that answer nothing in a wait are kept: the question is asked again,
   await $.command.run({ command: 'foundry', args: 'sync', origin: { kind: 'composer' }, presentation: SHOWN })
   expect(hub.state(12)?.waiting?.kind).toBe('tamper')
 
-  asks.answerAt = index => (index === 0 ? 'what happened here?' : 'OK')
+  asks.answerAt = index => (index === 0 ? 'what happened here?' : 'OK, restored')
   await clock.advance(60_000)
   await clock.settle()
 
-  expect(asks.labels[0]).toEqual(['OK', 'Not yet'])
+  expect(asks.labels[0]).toEqual(['OK, restored', 'Not yet'])
   expect(asks.questions[1]).toContain('"what happened here?" doesn\'t answer this wait.')
   expect(hub.state(12)?.waiting).toBeUndefined()
 })
@@ -566,6 +579,63 @@ test('the plan is copied to the lead issue when it changes, in one comment, and 
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
   expect(await ui.find({ type: 'Link', text: /Plan on GitHub/ })).toBeDefined()
   await ui.unmount()
+})
+
+test('a new wait reaches the person as a notification, taken back once they decide', async ($, on) => {
+  const { notes } = engine(on)
+  await toPlanSignoff($)
+  expect(notes.sent).toHaveLength(1)
+  expect(notes.sent[0]?.text).toBe('Foundry: "T" (#12) is waiting on you: Plan sign-off.')
+  const key = notes.sent[0]?.key ?? ''
+  expect(key).not.toBe('')
+
+  await $.command.run({ command: 'foundry', args: 'approve #12', origin: { kind: 'bridge' }, presentation: SHOWN })
+  expect(notes.taken).toEqual([key])
+})
+
+test('the card puts the request first, names each button by its batch, and says each state in words', async ($, on) => {
+  engine(on)
+  await $.session.start({ cwd: '/repo', surface: 'desktop', isInteractive: true })
+  await $.tool.call({ tool: 'mcp__foundry__batch_start', title: 'Name the ports', issues: [12] })
+  const before = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  // Nothing tested and no pull request yet: no Tests and CI row to read.
+  expect(await before.find({ type: 'Text', text: /Tests not run/ })).toBeUndefined()
+  expect(await before.find({ type: 'Text', text: /security not reviewed/ })).toBeDefined()
+  await before.unmount()
+
+  await approveAll($)
+  await $.tool.call({ tool: 'mcp__foundry__tests_record', command: 'npm test', passed: true, summary: 'ok' })
+  await $.tool.call({ tool: 'mcp__foundry__signoff_request', summary: 'The plan' })
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  // It draws "Approve"; its name, which a screen reader reads, says which batch. It takes the keys first.
+  const approve = await ui.find({ key: '12-approve' })
+  expect(approve?.text).toBe('Approve')
+  expect(approve?.props).toMatchObject({ label: 'Approve: Name the ports', autoFocus: true })
+  expect(await ui.find({ type: 'Text', text: /security ready/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /Tests pass/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /CI not run/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('commands read kindly: any case, aliases, and a miss names what does apply', async ($, on) => {
+  const { hub, files } = engine(on)
+  await toPlanSignoff($)
+  files.set('/repo/docs/plans/12.md', '# Plan for T\n\nSlots first.')
+
+  const wrong = await $.command.run({ command: 'foundry', args: 'compromise #12', origin: { kind: 'bridge' }, presentation: SHOWN })
+  expect(wrong.text).toContain('#12 is waiting on Plan sign-off: type `/foundry approve #12`, `/foundry changes #12`.')
+
+  const status = await $.command.run({ command: 'foundry', args: 'status', origin: { kind: 'bridge' }, presentation: SHOWN })
+  expect(status.text).toContain('Waiting on you: Plan sign-off. Type `/foundry approve #12`, `/foundry changes #12`.')
+  const plan = await $.command.run({ command: 'foundry', args: 'Plan #12', origin: { kind: 'bridge' }, presentation: SHOWN })
+  expect(plan.text).toContain('Slots first.')
+
+  // A phone keyboard's capital, and the word people reach for.
+  const typed = await $.command.run({ command: 'foundry', args: 'Approve #12', origin: { kind: 'bridge' }, presentation: SHOWN })
+  expect(typed.text).toContain('Done: approve')
+  expect(hub.state(12)?.stage).toBe('build')
+  const pane = await $.command.run({ command: 'foundry', args: 'pane', origin: { kind: 'bridge' }, presentation: SHOWN })
+  expect(pane.text).toBe('Foundry pane opened.')
 })
 
 test("a card shows the batch's plan file from this checkout, at a press", async ($, on) => {
