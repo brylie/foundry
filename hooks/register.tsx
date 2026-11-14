@@ -27,6 +27,9 @@ import {
   decide,
   decisionOptions,
   extraReviews,
+  freeTextAction,
+  NOT_YET,
+  questionChoices,
   allowlist,
   howToDecide,
   isLoopStage,
@@ -59,6 +62,7 @@ const batchesAtom = atom({ plugin: 'foundry', key: 'batches' } as const, [] as B
 const EMPTY_META: Meta = { mine: null, written: {}, delivered: {}, errors: {}, syncedAt: 0 }
 const metaAtom = atom({ plugin: 'foundry', key: 'meta' } as const, EMPTY_META, { shape: 'meta-2' })
 const plansShownAtom = atom({ plugin: 'foundry', key: 'plansShown' } as const, [] as string[], { shape: 'plans-shown-1' })
+const endingAtom = atom({ plugin: 'foundry', key: 'ending' } as const, [] as string[], { shape: 'ending-1' })
 /** How much of a plan file the card shows: plenty for a plan, and bounded, so a huge file can't swamp the panel. */
 const PLAN_SHOWN_CHARS = 20_000
 
@@ -685,6 +689,13 @@ function press($: EngineInterface, task: () => Promise<void>): () => void {
     })
 }
 
+/** A decision with the words the person gave it, passed to the agent as theirs; none, or a refused move, adds nothing. */
+function withWords(moved: Move, words: string | undefined, now: number): Move {
+  if (words === undefined || words.trim() === '' || moved.error !== undefined) return moved
+
+  return { ...moved, batch: appendLog(moved.batch, now, `The person wrote: ${words.trim()}`, true) }
+}
+
 /**
  * Carries out the person's decision. `words` are what they typed with it,
  * passed to the agent as theirs. With `wait`, it answers that wait alone
@@ -694,9 +705,8 @@ async function pressDecide($: EngineInterface, key: string, decision: Decision, 
   const now = await $.clock.now()
   const result = await apply($, key, batch => {
     if (wait !== undefined && waitIdentity(batch) !== wait) return { batch, error: 'That question was already decided.' }
-    const moved = decide(batch, decision, now)
 
-    return words === undefined || moved.error ? moved : { ...moved, batch: appendLog(moved.batch, now, `The person wrote: ${words}`, true) }
+    return withWords(decide(batch, decision, now), words, now)
   })
   if (wait !== undefined && result?.error !== undefined) $.ui.toast(`Foundry: ${result.error}`)
   if (result === undefined || result.error) return
@@ -724,39 +734,83 @@ const asked = new Set<string>()
  * Asks the person about this session's waiting batch in a question card, the
  * engine's own AskUserQuestion dialog, which shows where the panel does not:
  * on their phone, say. Only their answer decides, as a press on the card
- * would. Words typed under "Other" ask for changes, where that is an option,
- * and reach the agent as theirs.
+ * would.
+ *
+ * Every option is offered: past four, the reviewers to overrule or dismiss
+ * are picked in a second question. Words typed under "Other" ask for changes
+ * or, for a conflict, are the compromise, and reach the agent as theirs.
+ * Words that decide nothing here are not dropped: the question is asked
+ * again, saying so. `preface` opens that second asking.
  */
-async function askPerson($: EngineInterface): Promise<void> {
+async function askPerson($: EngineInterface, preface = ''): Promise<void> {
   const batch = await mine($)
   const waiting = batch?.waiting
   if (batch === undefined || waiting === undefined) return
-  const options = decisionOptions(batch).slice(0, 4)
+  const choices = questionChoices(batch)
   const key = batchKey(batch)
   const id = waitIdentity(batch)
-  if (options.length === 0 || id === undefined || asked.has(id)) return
+  if (choices.length === 0 || id === undefined || asked.has(id)) return
   asked.add(id)
 
-  const question = `Foundry, "${batch.title}" (#${batch.lead}): ${WAIT_LABEL[waiting.kind]}.\n\n${waiting.summary}\n\nWhat do you decide?`
+  const options = decisionOptions(batch)
+  const words = freeTextAction(batch)
+  const hint = words === 'changes' ? ' Or write what to change under Other.' : words === 'compromise' ? ' Or write the compromise under Other.' : ''
+  const typed = options.map(o => `\`${o.typed}\``).join(', ')
+  const question = `${preface}Foundry, "${batch.title}" (#${batch.lead}): ${WAIT_LABEL[waiting.kind]}.\n\n${waiting.summary}\n\nWhat do you decide?${hint} You can also type ${typed}.`
   let answer: string
   try {
-    answer = await $.ui.ask(question, { options: options.map(o => o.label), header: 'Foundry' })
+    answer = await $.ui.ask(question, { options: choices.map(c => c.label), header: 'Foundry' })
   } catch {
     // Dismissed, or no one to ask: the card and the typed commands still answer.
     return
   }
-  const chosen = options.find(o => o.label === answer)
-  const decision = chosen?.decision ?? options.find(o => o.decision.action === 'changes')?.decision
-  if (decision === undefined) {
-    $.ui.toast(`Foundry: "${answer.slice(0, 80)}" is not one of the choices. Answer on the card, or type a /foundry command.`)
 
-    return
+  let decision: Decision | undefined
+  let said: string | undefined
+  const choice = choices.find(c => c.label === answer)
+  if (choice !== undefined && choice.options.length === 0) return
+  if (choice !== undefined && choice.options.length === 1) decision = choice.options[0]?.decision
+  if (choice !== undefined && choice.options.length > 1) {
+    // A group: which one, in a second question. Past four there, the rest are typed.
+    const picks = choice.options.slice(0, 4)
+    const more = choice.options.length > picks.length ? ` Or type ${choice.options.slice(picks.length).map(o => `\`${o.typed}\``).join(', ')}.` : ''
+    let pick: string
+    try {
+      pick = await $.ui.ask(`${choice.label.replace('…', '')}: which one?${more}`, { options: picks.length === 1 ? [...picks.map(o => o.label), NOT_YET] : picks.map(o => o.label), header: 'Foundry' })
+    } catch {
+      return
+    }
+    decision = picks.find(o => o.label === pick)?.decision
+    if (decision === undefined && pick !== NOT_YET) askAgain($, id, pick)
+    if (decision === undefined) return
   }
-  const words = chosen === undefined ? answer : undefined
+  if (choice === undefined) {
+    const action = words === undefined ? undefined : options.find(o => o.decision.action === words)?.decision
+    if (action === undefined) {
+      askAgain($, id, answer)
+
+      return
+    }
+    decision = action
+    said = answer
+  }
+  if (decision === undefined) return
   // The answer may come hours later, and every read of one dispatch sees the moment it began: it is
   // carried out in a dispatch of its own, which reads the batch as it is now. The answer is to this
   // wait alone: one decided meanwhile, or a later one in its place, takes nothing from it.
-  $.clock.after(0, press($, () => pressDecide($, key, decision, words, id)))
+  $.clock.after(0, press($, () => pressDecide($, key, decision, said, id)))
+}
+
+/**
+ * Words that answer no choice of this wait are kept: the transcript says what
+ * happened, and the question is asked again, in a dispatch of its own so it
+ * reads the batch as it is now.
+ */
+function askAgain($: EngineInterface, id: string, answer: string): void {
+  const shown = answer.length > 80 ? `${answer.slice(0, 80)}…` : answer
+  $.ui.log(`Foundry: "${shown}" doesn't answer this wait, so nothing was decided. Pick one of the choices, or type the command.`)
+  asked.delete(id)
+  $.clock.after(0, press($, () => askPerson($, `"${shown}" doesn't answer this wait. `)))
 }
 
 /** A ship decision (a dismissal, more waiting) re-reads the pull request at once, so the next wait shows now. */
@@ -767,6 +821,16 @@ async function afterShipDecision($: EngineInterface, decision: Decision): Promis
 async function releaseIfMine($: EngineInterface, key: string): Promise<void> {
   await update($, metaAtom, meta => (meta.mine === key ? { ...meta, mine: null } : meta))
   await show($)
+}
+
+/** Ending stops a batch's gates for good: the card asks first, and `asking` false takes the question back. */
+async function askToEnd($: EngineInterface, key: string, asking: boolean): Promise<void> {
+  await update($, endingAtom, keys => (asking ? [...keys.filter(k => k !== key), key] : keys.filter(k => k !== key)))
+}
+
+async function endBatch($: EngineInterface, key: string): Promise<void> {
+  await askToEnd($, key, false)
+  await pressDecide($, key, { action: 'end' })
 }
 
 async function togglePlan($: EngineInterface, key: string): Promise<void> {
@@ -1175,7 +1239,8 @@ export const register: Register = (on, options) => {
   on('command.run', { command: COMMAND }, async ($, e) => {
     const words = e.args.trim().split(/\s+/).filter(Boolean)
     const target = words.find(w => /^#\d+$/.test(w))
-    const [verb = 'status', arg] = words.filter(w => w !== target)
+    const [verb = 'status', ...rest] = words.filter(w => w !== target)
+    const arg = rest[0]
 
     if (verb === 'pane') {
       await openPane($)
@@ -1218,17 +1283,26 @@ export const register: Register = (on, options) => {
       return { text: 'Usage: /foundry [status | approve | changes | veto <reviewer> | compromise | wait | dismiss <bot> | ack | end | sync | pane] [#lead]' }
     }
 
+    // Ending stops the gates for good, so it takes a second word, typed on purpose.
+    if (decision.action === 'end' && arg !== 'confirm') {
+      return {
+        text: `Ending "${batch.title}" (#${batch.lead}) stops its gates guarding, and can't be undone. To end it, type \`/foundry end #${batch.lead} confirm\`.`,
+      }
+    }
+    // What follows `changes` or `compromise` is what the person wants: it reaches the agent as theirs.
+    const said = decision.action === 'changes' || decision.action === 'compromise' ? rest.join(' ') : undefined
+
     const key = batchKey(batch)
     const now = await $.clock.now()
-    const result = await apply($, key, b => decide(b, decision, now))
+    const result = await apply($, key, b => withWords(decide(b, decision, now), said, now))
     if (result?.error) return { text: result.error }
     await afterShipDecision($, decision)
-    // A command may not submit a prompt while it holds the command: its notes ride as context instead.
-    const notes = await takeNotes($, await mine($))
     if (decision.action === 'end') await releaseIfMine($, key)
-    const text = `Done: ${decision.action}.${await unsaved($, key)}`
+    // A command's context waits for the agent's next turn, and may start none: the agent is woken,
+    // as a press wakes it, once the command is done (a command may not submit a prompt while it runs).
+    $.clock.after(0, press($, async () => deliver($, await mine($))))
 
-    return notes.length > 0 ? { text, context: notes } : { text }
+    return { text: `Done: ${decision.action} for "${batch.title}" (#${batch.lead}). The agent is told.${await unsaved($, key)}` }
   })
 
   // -------------------------------------------------------------------------
@@ -1253,6 +1327,7 @@ export const register: Register = (on, options) => {
     )
     // The plans of the cards the person opened, read from this checkout as they stand now.
     const shown = await read($, plansShownAtom)
+    const ending = await read($, endingAtom)
     const plans = new Map(
       await Promise.all(batches.filter(b => shown.includes(batchKey(b))).map(async b => [batchKey(b), await planText($, b)] as const)),
     )
@@ -1368,7 +1443,7 @@ export const register: Register = (on, options) => {
                         case 'acknowledge':
                           return [<Button key={`${id}-ack`} label="OK" onPress={press($, () => pressDecide($, key, { action: 'acknowledge' }))} />]
                         case 'end':
-                          return [<Button key={`${id}-end-now`} label="End batch" onPress={press($, () => pressDecide($, key, { action: 'end' }))} />]
+                          return [<Button key={`${id}-end-now`} label="End batch…" onPress={press($, () => askToEnd($, key, true))} />]
                         default:
                           return []
                       }
@@ -1388,12 +1463,23 @@ export const register: Register = (on, options) => {
                   )}
                 </Box>
               )}
-              <Box flexDirection="row" columnGap={2} marginTop={1}>
+              {ending.includes(key) && batch.stage !== 'done' && (
+                <Box flexDirection="column" marginTop={1}>
+                  <Text color="warning">End "{batch.title}"? Its gates stop guarding, and it can't be undone.</Text>
+                  <Box flexDirection="row" flexWrap="wrap" columnGap={2}>
+                    <Button key={`${id}-end-confirm`} label="End batch" onPress={press($, () => endBatch($, key))} />
+                    <Button key={`${id}-end-keep`} label="Keep batch" variant="primary" onPress={press($, () => askToEnd($, key, false))} />
+                  </Box>
+                </Box>
+              )}
+              <Box flexDirection="row" flexWrap="wrap" columnGap={2} marginTop={1}>
                 <Button key={`${id}-plan`} label={plans.has(key) ? 'Hide plan' : 'Plan'} plain onPress={press($, () => togglePlan($, key))} />
                 {batch.stage === 'done' ? (
                   <Button key={`${id}-clear`} label="Clear" plain onPress={press($, () => clearCard($, key))} />
                 ) : (
-                  <Button key={`${id}-end`} label="End batch" plain onPress={press($, () => pressDecide($, key, { action: 'end' }))} />
+                  // The alert's own End batch, at a ship round limit, stands in for this one.
+                  !choices(batch).includes('end') &&
+                  !ending.includes(key) && <Button key={`${id}-end`} label="End batch…" plain onPress={press($, () => askToEnd($, key, true))} />
                 )}
               </Box>
             </Box>

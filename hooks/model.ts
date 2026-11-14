@@ -424,6 +424,54 @@ export function decisionOptions(batch: Batch): DecisionOption[] {
   })
 }
 
+/**
+ * One choice in Foundry's question card: a single option, several that a
+ * second question picks between (one per reviewer to overrule, say), or none
+ * (`Not yet`, which decides nothing and leaves the card and the commands).
+ */
+export type QuestionChoice = { label: string; options: DecisionOption[] }
+
+/** The card offers 2 to 4 choices: the engine pads fewer than two with a Yes and No that mean nothing here. */
+const MAX_CHOICES = 4
+const GROUP_LABEL: Partial<Record<Decision['action'], string>> = { veto: 'Overrule a reviewer…', dismiss: 'Dismiss a reviewer…' }
+export const NOT_YET = 'Not yet'
+
+/**
+ * The batch's wait as the question card offers it: every option, grouped per
+ * kind once there are more than four, and never fewer than two choices.
+ */
+export function questionChoices(batch: Batch): QuestionChoice[] {
+  const options = decisionOptions(batch)
+  if (options.length === 0) return []
+  let choices: QuestionChoice[] = options.map(o => ({ label: o.label, options: [o] }))
+  if (options.length > MAX_CHOICES) {
+    choices = []
+    for (const o of options) {
+      const group = GROUP_LABEL[o.decision.action]
+      const same = choices.find(c => group !== undefined && c.label === group)
+      if (same) same.options.push(o)
+      else choices.push({ label: group ?? o.label, options: [o] })
+    }
+    // A group of one is that option itself.
+    choices = choices.map(c => (c.options.length === 1 && c.options[0] ? { label: c.options[0].label, options: c.options } : c)).slice(0, MAX_CHOICES)
+  }
+
+  return choices.length === 1 ? [...choices, { label: NOT_YET, options: [] }] : choices
+}
+
+/**
+ * What words the person types instead of a choice mean, for this wait: the
+ * changes they want, or for a conflict the compromise. Undefined where words
+ * decide nothing (a bot to dismiss, a restored state).
+ */
+export function freeTextAction(batch: Batch): 'changes' | 'compromise' | undefined {
+  const actions = decisionOptions(batch).map(o => o.decision.action)
+  if (actions.includes('changes')) return 'changes'
+  if (actions.includes('compromise')) return 'compromise'
+
+  return undefined
+}
+
 /** Where and how the person answers the batch's wait, in a sentence for the agent to pass on. */
 export function howToDecide(batch: Batch): string {
   const typed = decisionOptions(batch).map(o => `\`${o.typed}\``)

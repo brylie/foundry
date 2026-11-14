@@ -154,6 +154,7 @@ function engine(on: On) {
   const gate: { pattern?: RegExp; open: () => void } = { open: () => {} }
   const clock = mock.clock(on)
   on('ui.status', () => ({ value: undefined }))
+  on('ui.log', () => ({ value: undefined }))
   on('ui.toast', () => ({ value: undefined }))
   on('command.register', (_, e) => ({ value: { command: e.name } }))
   on('tool.register', (_, e) => ({ value: { tool: `mcp__foundry__${e.name}` } }))
@@ -187,6 +188,8 @@ function engine(on: On) {
    */
   const asks = {
     questions: [] as string[],
+    /** The choices each question offered, by the same index. */
+    labels: [] as string[][],
     answer: undefined as string | undefined,
     answerAt: undefined as ((index: number) => string | undefined) | undefined,
     held: undefined as Promise<void> | undefined,
@@ -204,6 +207,7 @@ function engine(on: On) {
     if (e.tool === 'AskUserQuestion') {
       const question = (e as unknown as { questions: { question: string }[] }).questions[0]?.question ?? ''
       const index = asks.questions.push(question) - 1
+      asks.labels.push((e as unknown as { questions: { options: { label: string }[] }[] }).questions[0]?.options.map(o => o.label) ?? [])
       // A question the person leaves open answers only once the test lets it.
       if (asks.held) await asks.held
       const answer = asks.answerAt ? asks.answerAt(index) : asks.answer
@@ -232,7 +236,7 @@ async function press($: Engine, key: string) {
 }
 
 test('a batch moves through every stage, its state in GitHub, gated by the person', async ($, on) => {
-  const { hub, prompts, ran } = engine(on)
+  const { hub, prompts, ran, clock } = engine(on)
   hub.setConfig('online_reviewers:\n  - coderabbitai[bot]\n  - gitar-bot[bot]\nmaintainers: [maintainer]\n')
   await $.session.start({ cwd: '/repo', surface: 'desktop', isInteractive: true })
 
@@ -276,7 +280,10 @@ test('a batch moves through every stage, its state in GitHub, gated by the perso
 
   // Build sign-off, by the person's command.
   const typed = await $.command.run({ command: 'foundry', args: 'approve', origin: { kind: 'composer' }, presentation: SHOWN })
-  expect(typed.context?.[0]).toContain('approved the implementation')
+  expect(typed.text).toContain('Done: approve for "Name the ports" (#12)')
+  // The command wakes the agent once it is done, as a press would: a command's context alone may start no turn.
+  await clock.settle()
+  expect(prompts.at(-1)).toContain('approved the implementation')
 
   // Ship gates.
   expect((await $.tool.call({ tool: 'Bash', command: 'git push -u origin HEAD' })).deny).toBeUndefined()
@@ -402,8 +409,9 @@ test('a question answered after its gate was decided elsewhere decides nothing, 
   await approveAll($)
   await $.tool.call({ tool: 'mcp__foundry__signoff_request', summary: 'build' })
 
-  // The plan's question, still open on the phone, is answered at last.
-  asks.answer = 'Approve'
+  // The plan's question, still open on the phone, is answered at last. The build sign-off is a
+  // wait of its own, asked about separately: that question is left open.
+  asks.answerAt = index => (index === 0 ? 'Approve' : undefined)
   answer()
   await clock.settle()
 
@@ -443,6 +451,113 @@ test("a reviewer's comment question left open is no answer to the same kind of c
   await clock.settle()
   expect(hub.state(12)?.waiting?.kind).toBe('bot-comment')
   expect(hub.state(12)?.ship?.dismissed).not.toContain(`gitar-bot@${newHead}`)
+})
+
+test('words typed after a decision reach the agent as the person’s, and a typed decision wakes the agent', async ($, on) => {
+  const { hub, prompts, clock } = engine(on)
+  await toPlanSignoff($)
+  const typed = await $.command.run({ command: 'foundry', args: 'changes #12 split the slot type out first', origin: { kind: 'bridge' }, presentation: SHOWN })
+  expect(typed.text).toContain('Done: changes for "T" (#12)')
+  expect(typed.context).toBeUndefined()
+  await clock.settle()
+
+  expect(hub.state(12)?.log.some(e => e.isForAgent === true && e.text === 'The person wrote: split the slot type out first')).toBe(true)
+  expect(prompts.at(-1)).toContain('The person wrote: split the slot type out first')
+})
+
+test('a conflict’s compromise can be typed in one go, or written under Other in its question', async ($, on) => {
+  const { hub, asks, clock } = engine(on)
+  await $.session.start({ cwd: '/repo', surface: 'desktop', isInteractive: true })
+  await $.tool.call({ tool: 'mcp__foundry__batch_start', title: 'T', issues: [12] })
+  await $.tool.call({ tool: 'mcp__foundry__conflict_raise', perspectives: ['usability', 'security'], summary: 'X or Y' })
+  asks.answer = 'Keep X, but behind a setting.'
+  await clock.advance(60_000)
+  await clock.settle()
+
+  expect(hub.state(12)?.waiting).toBeUndefined()
+  expect(hub.state(12)?.log.some(e => e.isForAgent === true && e.text === 'The person wrote: Keep X, but behind a setting.')).toBe(true)
+  expect(asks.questions[0]).toContain('Or write the compromise under Other.')
+  expect(asks.questions[0]).toContain('`/foundry compromise #12`')
+})
+
+test('words that answer nothing in a wait are kept: the question is asked again, and a one-choice wait offers Not yet', async ($, on) => {
+  const { hub, asks, clock } = engine(on)
+  await $.session.start({ cwd: '/repo', surface: 'desktop', isInteractive: true })
+  await $.tool.call({ tool: 'mcp__foundry__batch_start', title: 'T', issues: [12] })
+  // A restored outside edit: its one choice is OK.
+  const comment = hub.comments.get(12)?.[0]
+  if (comment) comment.body = comment.body.replace('"stage":"plan"', '"stage":"ship"')
+  await $.command.run({ command: 'foundry', args: 'sync', origin: { kind: 'composer' }, presentation: SHOWN })
+  expect(hub.state(12)?.waiting?.kind).toBe('tamper')
+
+  asks.answerAt = index => (index === 0 ? 'what happened here?' : 'OK')
+  await clock.advance(60_000)
+  await clock.settle()
+
+  expect(asks.labels[0]).toEqual(['OK', 'Not yet'])
+  expect(asks.questions[1]).toContain('"what happened here?" doesn\'t answer this wait.')
+  expect(hub.state(12)?.waiting).toBeUndefined()
+})
+
+test('Not yet decides nothing and is not asked again', async ($, on) => {
+  const { hub, asks, clock } = engine(on)
+  await $.session.start({ cwd: '/repo', surface: 'desktop', isInteractive: true })
+  await $.tool.call({ tool: 'mcp__foundry__batch_start', title: 'T', issues: [12] })
+  const comment = hub.comments.get(12)?.[0]
+  if (comment) comment.body = comment.body.replace('"stage":"plan"', '"stage":"ship"')
+  await $.command.run({ command: 'foundry', args: 'sync', origin: { kind: 'composer' }, presentation: SHOWN })
+  asks.answer = 'Not yet'
+  await clock.advance(60_000)
+  await clock.advance(60_000)
+  await clock.settle()
+
+  expect(asks.questions).toHaveLength(1)
+  expect(hub.state(12)?.waiting?.kind).toBe('tamper')
+})
+
+test('a wait with more than four choices groups the reviewers to overrule, and a second question picks one', { options: { maxRounds: 1 } }, async ($, on) => {
+  const { hub, asks, clock } = engine(on)
+  await $.session.start({ cwd: '/repo', surface: 'desktop', isInteractive: true })
+  await $.tool.call({ tool: 'mcp__foundry__batch_start', title: 'T', issues: [12] })
+  for (const perspective of [...REVIEWERS, 'usability']) {
+    await $.tool.call({ tool: 'mcp__foundry__review_record', perspective, reviewer: `foundry:${perspective}`, verdict: 'revise', summary: 'no' })
+  }
+  expect(hub.state(12)?.waiting?.kind).toBe('round-limit')
+
+  asks.answerAt = index => (index === 0 ? 'Overrule a reviewer…' : 'Veto architecture')
+  await clock.advance(60_000)
+  await clock.settle()
+
+  expect(asks.labels[0]).toEqual(['Approve', 'Another round', 'Overrule a reviewer…'])
+  // Four reviewers to pick from; the rest are named, to type.
+  expect(asks.labels[1]).toEqual(['Veto product-owner', 'Veto usability', 'Veto accessibility', 'Veto architecture'])
+  expect(asks.questions[1]).toContain('`/foundry veto security #12`')
+  expect(asks.questions[1]).toContain('`/foundry veto documentation #12`')
+  expect(hub.state(12)?.vetoes).toEqual(['architecture'])
+})
+
+test('ending a batch asks first, on the card and by command', async ($, on) => {
+  const { hub } = engine(on)
+  await $.session.start({ cwd: '/repo', surface: 'desktop', isInteractive: true })
+  await $.tool.call({ tool: 'mcp__foundry__batch_start', title: 'T', issues: [12] })
+
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await ui.press({ key: '12-end' })
+  expect(await ui.find({ type: 'Text', text: /End "T"\? Its gates stop guarding/ })).toBeDefined()
+  await ui.press({ key: '12-end-keep' })
+  expect(await ui.find({ type: 'Text', text: /End "T"\?/ })).toBeUndefined()
+  expect(hub.state(12)?.stage).toBe('plan')
+  await ui.unmount()
+
+  const asked = await $.command.run({ command: 'foundry', args: 'end #12', origin: { kind: 'composer' }, presentation: SHOWN })
+  expect(asked.text).toContain('`/foundry end #12 confirm`')
+  expect(hub.state(12)?.stage).toBe('plan')
+
+  const again = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await again.press({ key: '12-end' })
+  await again.press({ key: '12-end-confirm' })
+  await again.unmount()
+  expect(hub.state(12)?.stage).toBe('done')
 })
 
 test("a card shows the batch's plan file from this checkout, at a press", async ($, on) => {
