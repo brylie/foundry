@@ -4,6 +4,20 @@ Foundry's notable changes, newest first. Versions follow [Semantic Versioning](h
 
 ## Unreleased
 
+- **A wait finds you.** When a batch starts waiting, the session that runs it sends a notification through your own channel, taken back once you decide. The toast stays 15 seconds instead of 4, a line in the transcript keeps it, and the panel opens where one shows.
+- **The card, clearer.**
+  - The "waiting on you" alert comes first, says how long it has waited, and puts its buttons above the detail.
+  - A sign-off says which one: "Plan sign-off" or "Build sign-off", here and in the status line, the question and the state comment.
+  - Each light says its state in words beside the glyph and colour, and a **Now:** line gives the stage and round in words.
+  - The Tests and CI row appears once there is something in it, and the pull request link says when it's a draft.
+  - "Outside the allowlist" is no longer dimmed.
+- **Accessible names and focus.** Each decision button's name says which batch it acts on ("Approve: Name the ports"), "OK" reads "OK, restored", and the keyboard starts on this session's first decision when you move into the panel.
+- **Commands that read kindly.**
+  - Verbs work in any case, as phone keyboards capitalize, and accept a few aliases (`ok`, `overrule`, `send-back`).
+  - A command that doesn't fit the wait names the ones that do.
+  - `/foundry plan` shows the plan.
+  - `/foundry status` lists the commands that answer a wait, and the other open batches.
+  - `/foundry pane` says where the panel shows when it can't open.
 - **The plan, on GitHub.** The plan file stays in the repository; at each review and sign-off the mod also copies it into a comment on the lead issue, rewriting it only when the plan changed. It reads anywhere, the GitHub app on your phone included. The card shows **Plan on GitHub**, and the question card and the agent's sign-off message link to it.
 - **A draft pull request during the build.** The build loop now pushes and opens a draft (`gh pr create --draft`), so the build sign-off can link to the diff on GitHub. A pull request for review, or `gh pr ready`, still waits for the build sign-off; after it, the agent marks the draft ready and the ship gates watch it.
 - **The ship gate no longer waits on the online reviewers.** It passes when CI is green and no change request or review thread from the allowlist is open. What a reviewer finds still arrives as a change request or a thread, which the agent picks up, and which holds the pull request until it's fixed. Gone with the wait:

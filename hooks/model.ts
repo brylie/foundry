@@ -46,6 +46,24 @@ export const WAIT_LABEL: Record<WaitKind, string> = {
   tamper: 'State edited outside Foundry',
 }
 
+/** What the batch waits on, in the person's words: a sign-off says which one. */
+export function waitLabel(batch: Batch): string {
+  const kind = batch.waiting?.kind
+  if (kind === undefined) return ''
+  if (kind === 'signoff') return batch.stage === 'build' ? 'Build sign-off' : 'Plan sign-off'
+
+  return WAIT_LABEL[kind]
+}
+
+/** How long something has waited, in words: "just now", "5 minutes", "2 hours", "3 days". */
+export function waitedFor(since: number, now: number): string {
+  const minutes = Math.floor(Math.max(0, now - since) / 60_000)
+  if (minutes < 1) return 'just now'
+  const [n, unit] = minutes < 60 ? [minutes, 'minute'] : minutes < 48 * 60 ? [Math.floor(minutes / 60), 'hour'] : [Math.floor(minutes / (24 * 60)), 'day']
+
+  return `${n} ${unit}${n === 1 ? '' : 's'}`
+}
+
 export function keyOf(repo: string, lead: number): string {
   return `${repo}#${lead}`
 }
@@ -199,13 +217,15 @@ export function appendLog(batch: Batch, at: number, text: string, isForAgent = f
 const log = appendLog
 
 function wait(batch: Batch, waiting: Omit<Waiting, 'at'>, at: number): Batch {
-  return log({ ...batch, waiting: { ...waiting, at } }, at, `Waiting on you: ${WAIT_LABEL[waiting.kind]}`)
+  const next = { ...batch, waiting: { ...waiting, at } }
+
+  return log(next, at, `Waiting on you: ${waitLabel(next)}`)
 }
 
 function busy(batch: Batch): string | undefined {
   if (batch.waiting === undefined) return undefined
 
-  return `"${batch.title}" is waiting on the person (${WAIT_LABEL[batch.waiting.kind]}). End your turn, and tell them how to decide: ${howToDecide(batch)} You will be told when they do.`
+  return `"${batch.title}" is waiting on the person (${waitLabel(batch)}). End your turn, and tell them how to decide: ${howToDecide(batch)} You will be told when they do.`
 }
 
 /**
@@ -403,7 +423,7 @@ export function decisionOptions(batch: Batch): DecisionOption[] {
       case 'compromise':
         return [{ label: "I'll write a compromise", decision: { action }, typed: `/foundry compromise ${at}` }]
       case 'acknowledge':
-        return [{ label: 'OK', decision: { action }, typed: `/foundry ack ${at}` }]
+        return [{ label: 'OK, restored', decision: { action }, typed: `/foundry ack ${at}` }]
       case 'end':
         return [{ label: 'End batch', decision: { action }, typed: `/foundry end ${at}` }]
       default:
@@ -487,7 +507,7 @@ export function decide(batch: Batch, decision: Decision, now: number): Move {
 
   const allowed = choices(batch)
   if (!allowed.includes(decision.action)) {
-    const what = batch.waiting ? WAIT_LABEL[batch.waiting.kind] : 'nothing'
+    const what = batch.waiting ? waitLabel(batch) : 'nothing'
 
     return { batch, error: `"${batch.title}" is waiting on ${what}; "${decision.action}" does not apply.` }
   }

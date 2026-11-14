@@ -70,22 +70,26 @@ When all of it is green, the card says **Ready to merge**. The merge is yours; t
 
 ## The panel
 
-The Foundry panel sits beside the chat and shows one card per batch, moving down the stages. It opens when a batch starts or needs you, and on demand with `/foundry pane`. Each card shows:
+The Foundry panel sits beside the chat and shows one card per batch, moving down the stages. It opens when a batch starts or needs you, and on demand with `/foundry pane`. Each card shows, from the top:
 
-- **The track:** Plan ▸ Plan sign-off ▸ Build ▸ Build sign-off ▸ Ship ▸ Done.
-- **The round counter.**
-- **Status lights for each reviewer:** ✓ ready, ~ revise, ✗ rethink, ○ not reviewed, ⊘ vetoed.
-- **Tests and CI lights,** plus the open review threads.
+- **A "waiting on you" alert,** first when there is one: what waits (a plan or build sign-off, say), for how long, your buttons, then the detail.
+- **The track:** ✓ for stages done, ▶ for the current one, · for those to come, and a **Now:** line that says the same in words with the round, such as "Now: Build, stage 3 of 6, round 1 of 3".
+- **Each reviewer's light, in words too:** ✓ ready, ~ revise, ✗ rethink, ○ not reviewed, ⊘ vetoed.
+- **Tests and CI,** once there is something to show (pass, fail, pending or not run), plus the open review threads.
 - **Anyone outside the allowlist** who commented, listed for you to read.
-- **A "waiting on you" alert** with the buttons for your decision:
+- **The pull request:** the draft during the build, then the one under review.
+
+When a wait begins, Foundry also tells you where you are: a toast that stays 15 seconds, a line in the transcript, and a notification through your own channel, taken back once you decide.
+
+Each button's name, which a screen reader reads, says which batch it acts on, such as "Approve: Name the ports". When you move into the panel, the keyboard starts on the first decision of this session's waiting card. The alert's buttons are:
 
 | Alert | Your buttons |
 |---|---|
-| Sign-off | Approve, Request changes |
+| Plan sign-off, Build sign-off | Approve, Request changes |
 | Round limit reached | Approve, Another round, Veto a reviewer (loops); Send back anyway, End batch (ship) |
 | Reviewer conflict | Veto a reviewer, I'll write a compromise |
 | Ready to merge | (merge on GitHub) |
-| State edited outside Foundry | OK |
+| State edited outside Foundry | OK, restored |
 
 Every button has a `/foundry` command too; see [Reference](reference.md#the-foundry-command). Each card also has a **Plan** button that shows the batch's plan file.
 

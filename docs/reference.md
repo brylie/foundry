@@ -38,8 +38,9 @@ The skills read the project's own rules (`AGENTS.md`, `CLAUDE.md`, `CONTRIBUTING
 
 | Command | What it does |
 |---|---|
-| `/foundry status` | Shows this session's batch: stage, round, reviewers, tests, CI. |
-| `/foundry pane` | Opens the Foundry panel. |
+| `/foundry status` | Shows this session's batch (stage, round, reviewers, tests, CI) and, when it waits on you, the commands that answer it, then the other open batches. |
+| `/foundry plan` | Shows the batch's plan, read from this checkout, with the link to its copy on GitHub. |
+| `/foundry pane` | Opens the Foundry panel. Where no panel shows, as on a phone, it says what to use instead. |
 | `/foundry approve` | Signs off the plan or the implementation. |
 | `/foundry changes [what to change]` | Sends it back for another round. What you write after it reaches the agent as yours. |
 | `/foundry veto <reviewer>` | Settles a conflict or a round limit by overruling one reviewer for this stage. |
@@ -48,7 +49,7 @@ The skills read the project's own rules (`AGENTS.md`, `CLAUDE.md`, `CONTRIBUTING
 | `/foundry end` | Ends the batch: its gates stop guarding, and it can't be undone, so it asks you to type `/foundry end #<lead> confirm`. The card's **End batch…** asks too. |
 | `/foundry sync` | Reads every open batch from GitHub now, and reports anything not yet saved. |
 
-Add `#<lead issue>` to act on another session's batch, for example `/foundry approve #45`. The commands work from your phone too, over Remote Control: when a batch waits, the agent's message names the one to type. A decision you type wakes the agent, as a press on the card does.
+Add `#<lead issue>` to act on another session's batch, for example `/foundry approve #45`. Verbs work in any case (`Approve` from a phone keyboard), and a few aliases do too: `ok` for `ack`, `overrule` for `veto`, `send-back` or `request-changes` for `changes`. A command that doesn't fit the wait says which ones do. The commands work from your phone too, over Remote Control: when a batch waits, the agent's message names the one to type. A decision you type wakes the agent, as a press on the card does.
 
 Decisions count only from you, at the prompt. A run from another session, a channel or a plugin is refused, and the agent can't invoke the command.
 

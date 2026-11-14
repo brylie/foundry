@@ -19,6 +19,8 @@ import {
   requestSignoff,
   sendBack,
   trackIndex,
+  waitedFor,
+  waitLabel,
 } from '../hooks/model'
 import { STATE_MARKER } from '../hooks/guard'
 import { digest, isBatch, labelsFor, parseState, renderPlanCopy, renderState } from '../hooks/state'
@@ -72,6 +74,19 @@ describe('deciding away from the panel', () => {
     expect(decisionOptions(start())).toEqual([])
     expect(howToDecide(start())).not.toContain('typing')
     expect(planPath(start())).toBe('docs/plans/12.md')
+  })
+})
+
+describe('words for the person', () => {
+  test('a sign-off says which one, and a wait says how long', async () => {
+    const plan = requestSignoff(approveAll(start()), 'please', 1).batch
+    expect(waitLabel(plan)).toBe('Plan sign-off')
+    expect(waitLabel({ ...plan, stage: 'build' })).toBe('Build sign-off')
+    expect(waitLabel(start())).toBe('')
+    expect(waitedFor(0, 30_000)).toBe('just now')
+    expect(waitedFor(0, 60_000)).toBe('1 minute')
+    expect(waitedFor(0, 5 * 3_600_000)).toBe('5 hours')
+    expect(waitedFor(0, 3 * 86_400_000)).toBe('3 days')
   })
 })
 
@@ -283,7 +298,7 @@ describe('the state comment', () => {
     const batch = requestSignoff(approveAll(start()), 'the plan', 3).batch
     const body = renderState(batch)
     expect(body).toContain('<!-- foundry:state -->')
-    expect(body).toContain('waiting on the maintainer: Sign-off')
+    expect(body).toContain('waiting on the maintainer: Plan sign-off')
     expect(parseState(body)).toEqual(batch)
     expect(parseState('a plain comment')).toBeUndefined()
     expect(labelsFor(batch)).toEqual(['foundry', 'foundry:plan', 'foundry:waiting'])
