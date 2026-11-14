@@ -205,3 +205,10 @@ export function isBatch(v: unknown): v is Batch {
 export function fingerprint(batch: Batch): string {
   return JSON.stringify({ ...batch, commentId: undefined })
 }
+
+/** The revision a fingerprint records. */
+export function revisionOf(print: string): number {
+  const rev = (JSON.parse(print) as { rev?: unknown }).rev
+
+  return typeof rev === 'number' ? rev : 0
+}
