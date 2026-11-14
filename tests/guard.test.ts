@@ -17,7 +17,7 @@ import {
 import { newBatch } from '../hooks/model'
 
 const DOCS = { requirements: ['docs/product'], specifications: ['docs/design'], decisions: ['docs/adr'], user: ['README.md'] }
-const SETTINGS = { reviewers: ['security'], maxRounds: 3, onlineReviewers: [], maintainers: [], botTimeoutMinutes: 30, docs: DOCS }
+const SETTINGS = { reviewers: ['security'], maxRounds: 3, onlineReviewers: [], maintainers: [], docs: DOCS }
 const plan = newBatch({ repo: 'o/r', title: 'T', issues: [1], owner: 's' }, SETTINGS, 0)
 const at = (stage: Batch['stage'], extra: Partial<Batch> = {}): Batch => ({ ...plan, stage, ...extra })
 

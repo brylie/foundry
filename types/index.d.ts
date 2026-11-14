@@ -22,7 +22,11 @@ export type Review = {
   at: number
 }
 
-/** What the person is asked to decide. */
+/**
+ * What the person is asked to decide. `bot-timeout` and `bot-comment` are
+ * legacy: 0.2 raised them while it waited on the online reviewers. Nothing
+ * raises them now; a record that still has one is cleared when it is read.
+ */
 export type WaitKind =
   | 'signoff'
   | 'conflict'
@@ -37,8 +41,6 @@ export type Waiting = {
   summary: string
   /** The reviewers in a conflict or at the round limit. */
   perspectives?: string[]
-  /** The online reviewers that timed out or left a comment to read. */
-  bots?: string[]
   at: number
 }
 
@@ -47,18 +49,6 @@ export type Light = 'pass' | 'fail' | 'pending' | 'none'
 /** The latest local test run the agent reported. */
 export type Tests = { light: Light; command: string; summary: string; at: number }
 
-export type BotLight =
-  | 'waiting'
-  | 'busy'
-  | 'reviewed'
-  | 'changes'
-  | 'comment'
-  | 'dismissed'
-  | 'timeout'
-
-/** Where one online reviewer stands on the pull request's head commit. */
-export type BotState = { login: string; light: BotLight; detail?: string }
-
 export type Check = { name: string; light: Light }
 
 /** The pull request's gates, as the mod last read them from GitHub. */
@@ -66,16 +56,12 @@ export type Ship = {
   pr: number
   url: string
   head: string
-  /** When the mod first saw this head commit: the online reviewers' clock starts here. */
-  headSeenAt: number
   ci: Light
   checks: Check[]
-  bots: BotState[]
+  /** Review threads from the allowlist still open, or resolved but not yet re-reviewed. */
   openThreads: number
   isMerged: boolean
   checkedAt: number
-  /** `login@head` entries the person dismissed or skipped, each for one head commit. */
-  dismissed: string[]
   /** The last ship event the agent was told about, so it is told once. */
   notice?: string
   /** People not on the allowlist who reviewed or commented: shown to the person, never acted on. */
@@ -139,16 +125,16 @@ export type Batch = {
   reviewers: string[]
   maxRounds: number
   /**
-   * The allowlist: the automated reviewers whose reviews gate the pull
-   * request, and the maintainers whose comments count as feedback (never as
-   * sign-off). Anyone else's comments are shown to the person and neither
-   * block the gate nor reach the agent as instructions.
+   * The allowlist: the automated reviewers and the maintainers whose reviews,
+   * threads and comments count as feedback (never as sign-off). Their change
+   * requests and open threads hold the pull request; the gate doesn't wait
+   * for them to review. Anyone else's comments are shown to the person and
+   * neither block the gate nor reach the agent as instructions.
    */
   onlineReviewers: string[]
   maintainers: string[]
   /** The repository's doc folders: the plan loop may edit requirements, specifications and decisions. */
   docs: DocFolders
-  botTimeoutMinutes: number
   /** The session that runs the batch. */
   owner: string
   /** The state comment's id, once written. */

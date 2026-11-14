@@ -38,12 +38,6 @@
       "title": "Maintainers",
       "description": "Comma-separated GitHub logins whose pull request comments count as reviewer feedback (never as sign-off). Empty means the account gh is signed in as. A repository's foundry.yaml overrides this.",
       "default": ""
-    },
-    "botTimeoutMinutes": {
-      "type": "number",
-      "title": "Online reviewer timeout (minutes)",
-      "description": "How long to wait for an online reviewer to review a new commit before it escalates to you.",
-      "default": 30
     }
   }
 }

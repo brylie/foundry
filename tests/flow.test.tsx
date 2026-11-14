@@ -290,13 +290,12 @@ test('a batch moves through every stage, its state in GitHub, gated by the perso
   expect(ran).toContain('git push -u origin HEAD')
   expect((await $.tool.call({ tool: 'mcp__foundry__pr_opened', pr: 'https://github.com/o/r/pull/9' })).deny).toBeUndefined()
   expect(hub.labels.get(9)).toEqual(['foundry', 'foundry:ship', 'foundry:waiting'])
-  expect(hub.state(12)?.waiting?.kind).toBe('bot-comment')
-
-  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
-  expect(await ui.find({ type: 'Text', text: /Waiting on you: Online reviewer comment to read/ })).toBeDefined()
-  await ui.press({ key: '12-dismiss-gitar-bot' })
-  await ui.unmount()
+  // CI is green and nothing is open: ready to merge, without waiting for gitar-bot's comment or any review.
   expect(hub.state(12)?.waiting?.kind).toBe('merge')
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect(await ui.find({ type: 'Text', text: /Waiting on you: Ready to merge/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /gitar-bot|coderabbitai/ })).toBeUndefined()
+  await ui.unmount()
   expect((await $.tool.call({ tool: 'Bash', command: 'gh pr merge 9 --squash' })).deny).toContain('the person merges')
 
   // The person merges on GitHub; the next poll sees it.
@@ -417,40 +416,6 @@ test('a question answered after its gate was decided elsewhere decides nothing, 
 
   expect(hub.state(12)?.stage).toBe('build')
   expect(hub.state(12)?.waiting?.kind).toBe('signoff')
-})
-
-test("a reviewer's comment question left open is no answer to the same kind of comment on a newer head", async ($, on) => {
-  const { hub, asks, clock } = engine(on)
-  let answer = () => {}
-  asks.held = new Promise<void>(resolve => (answer = resolve))
-  hub.setConfig('online_reviewers:\n  - coderabbitai[bot]\n  - gitar-bot[bot]\nmaintainers: [maintainer]\n')
-  await toShip($)
-  expect(hub.state(12)?.waiting?.kind).toBe('bot-comment')
-  void clock.advance(60_000)
-  await clock.settle()
-  expect(asks.questions).toHaveLength(1)
-
-  // A push: a new head, and gitar-bot's fresh summary on it, the same kind of wait.
-  const newHead = 'cafe0000b2'
-  hub.setPr({
-    headRefOid: newHead,
-    reviews: { nodes: [{ author: { login: 'coderabbitai' }, state: 'COMMENTED', submittedAt: '', commit: { oid: newHead } }] },
-    comments: { nodes: [{ author: { login: 'gitar-bot' }, body: 'Verification: no issues', updatedAt: new Date(5_000_000).toISOString() }] },
-  })
-  void clock.advance(60_000)
-  await clock.settle()
-  expect(hub.state(12)?.ship?.head).toBe(newHead)
-  expect(hub.state(12)?.waiting?.kind).toBe('bot-comment')
-
-  // The new head's comment is a wait of its own: the person is asked about it afresh.
-  expect(asks.questions).toHaveLength(2)
-
-  // The old head's question is answered at last, the new one left open: it dismisses nothing on the new head.
-  asks.answerAt = index => (index === 0 ? 'Dismiss gitar-bot' : undefined)
-  answer()
-  await clock.settle()
-  expect(hub.state(12)?.waiting?.kind).toBe('bot-comment')
-  expect(hub.state(12)?.ship?.dismissed).not.toContain(`gitar-bot@${newHead}`)
 })
 
 test('words typed after a decision reach the agent as the person’s, and a typed decision wakes the agent', async ($, on) => {

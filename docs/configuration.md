@@ -18,9 +18,8 @@ A batch takes the settings in force when it starts, so a change affects the next
 |---|---|---|
 | `reviewers` | `product-owner,usability,accessibility,architecture,security,documentation` | Comma-separated review perspectives. Every one must approve before a sign-off goes to you. An empty list means the defaults. |
 | `maxRounds` | `3` | Review rounds per stage before it escalates to you. CI reruns for flaky tests don't count. |
-| `onlineReviewers` | `coderabbitai[bot]` | The automated reviewers that must review a pull request's head commit. Codecov belongs in CI, as its status check. |
+| `onlineReviewers` | `coderabbitai[bot]` | The automated reviewers whose change requests and review threads hold a pull request, and whose comments reach the agent. Foundry doesn't wait for them to review. Codecov belongs in CI, as its status check. |
 | `maintainers` | *(the signed-in account)* | People whose pull request comments count as reviewer feedback, never as sign-off. |
-| `botTimeoutMinutes` | `30` | How long to wait for an online reviewer after a push before it escalates to you. |
 
 ## `foundry.yaml`
 
@@ -30,7 +29,7 @@ Foundry reads the file from the **default branch only**, never the checkout. A p
 
 ```yaml
 # Who reviews the pull request, and whose comments count.
-online_reviewers:        # must review the head commit; part of the allowlist
+online_reviewers:        # their change requests and threads count; part of the allowlist
   - coderabbitai[bot]
   - gitar-bot[bot]
 maintainers: [brylie]    # their comments count as feedback, never sign-off
@@ -38,7 +37,6 @@ maintainers: [brylie]    # their comments count as feedback, never sign-off
 # The review loops.
 reviewers: [product-owner, usability, accessibility, architecture, security, documentation]
 max_rounds: 3
-bot_timeout_minutes: 30
 
 # Where the docs live.
 requirements: [docs/product]      # the product owner's
@@ -53,10 +51,9 @@ user_docs: [README.md, docs/guide, docs/modules]
 | `maintainers` | `maintainers` | GitHub logins |
 | `reviewers` | `reviewers` | Review perspectives; a name outside the six runs as a general reviewer |
 | `max_rounds` | `maxRounds` | A whole number above 0 |
-| `bot_timeout_minutes` | `botTimeoutMinutes` | A number above 0 |
 | `requirements`, `specifications`, `decisions`, `user_docs` | *(found in the checkout)* | Folders or files inside the repository; see [Doc folders](#doc-folders) |
 
-The file uses a small YAML subset: top-level `key: value` lines, `[a, b]` or `- item` lists, and `#` comments. When a batch starts, Foundry reports an unknown key or a bad value rather than guessing what was meant. This repository's own [`foundry.yaml`](../foundry.yaml) is a working example.
+The file uses a small YAML subset: top-level `key: value` lines, `[a, b]` or `- item` lists, and `#` comments. When a batch starts, Foundry reports an unknown key or a bad value rather than guessing what was meant. `bot_timeout_minutes`, which 0.2 read, is reported as no longer used. This repository's own [`foundry.yaml`](../foundry.yaml) is a working example.
 
 ## Doc folders
 

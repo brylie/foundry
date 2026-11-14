@@ -9,7 +9,7 @@ Guide agents through a repeatable, gated process from GitHub issue to shipped co
 3. **Plan sign-off:** Brylie approves the plan and its docs.
 4. **Build loop:** An agent implements and tests, and updates the user and reference docs with the code. The same six reviewers check the work. The loop repeats until all six approve.
 5. **Build sign-off:** Brylie approves the implementation.
-6. **Ship gates:** Open a pull request. The online reviewers must approve and CI must go green. Failures or change requests send the work back to the build loop.
+6. **Ship gates:** Open a pull request. CI must go green, with no change request or review thread open from the allowlist. Foundry doesn't wait for the online reviewers to review: what they find arrives as a change request or a thread. Failures or change requests send the work back to the build loop.
 
 ## Rules
 - An oversight agent coordinates the stages.

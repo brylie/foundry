@@ -4,6 +4,15 @@ Foundry's notable changes, newest first. Versions follow [Semantic Versioning](h
 
 ## Unreleased
 
+- **The ship gate no longer waits on the online reviewers.** It passes when CI is green and no change request or review thread from the allowlist is open. What a reviewer finds still arrives as a change request or a thread, which the agent picks up, and which holds the pull request until it's fixed. Gone with the wait:
+  - the 30-minute timeout and its "Online reviewer silent" alert;
+  - the "Online reviewer comment to read" alert for comment-only reviewers such as gitar-bot;
+  - the per-reviewer lights on the card;
+  - `/foundry wait` and `/foundry dismiss`, which now say they're no longer used.
+
+  An online reviewer's thread the agent resolves still blocks until that reviewer has reviewed a newer commit, so resolving without a fix clears nothing.
+
+  **Upgrading:** a batch 0.2 left waiting on an online reviewer reads without that wait, and the next poll shows where its gate stands. `bot_timeout_minutes` in `foundry.yaml` and the `botTimeoutMinutes` plugin setting are no longer read; Foundry names the first as no longer used.
 - **Decisions from your phone reach the agent.**
   - **A typed decision wakes the agent.** `/foundry approve #12` and the other decision commands left the agent's news in hidden context, which waits for its next turn and starts none, so a session could sit idle after you decided. A typed decision now wakes the agent, as a press on the card does.
   - **Words with a decision reach the agent.** `/foundry changes #12 <what to change>` and `/foundry compromise #12 <the compromise>` pass on what you write; before, everything after the first word was dropped.

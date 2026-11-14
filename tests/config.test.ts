@@ -7,7 +7,7 @@ const PLUGIN = {
   maxRounds: 3,
   onlineReviewers: ['coderabbitai'],
   maintainers: [],
-  botTimeoutMinutes: 30,
+ 
   docs: { requirements: ['docs/product'], specifications: [], decisions: [], user: [] },
 }
 
@@ -54,6 +54,12 @@ bot_timeout_minutes: 45
     const { values, problems } = parseYaml('max_rounds :2  \nreviewers:\n-   security\t\n    -\tarchitecture\n')
     expect(problems).toEqual([])
     expect(values).toEqual({ max_rounds: 2, reviewers: ['security', 'architecture'] })
+  })
+
+  test('a setting Foundry no longer reads is named as such, and changes nothing', async () => {
+    const { config, problems } = readConfig('bot_timeout_minutes: 45\nmax_rounds: 2\n')
+    expect(config).toEqual({ maxRounds: 2 })
+    expect(problems).toEqual(['"bot_timeout_minutes" is no longer used: Foundry no longer waits on the online reviewers, so it has no timeout. You can remove it.'])
   })
 
   test("the README's example reads as written", async () => {
