@@ -14,7 +14,6 @@ export type RepoConfig = {
   maxRounds?: number
   onlineReviewers?: string[]
   maintainers?: string[]
-  botTimeoutMinutes?: number
   docs?: Partial<DocFolders>
 }
 
@@ -25,7 +24,11 @@ const KEYS: Record<string, keyof RepoConfig> = {
   max_rounds: 'maxRounds',
   online_reviewers: 'onlineReviewers',
   maintainers: 'maintainers',
-  bot_timeout_minutes: 'botTimeoutMinutes',
+}
+
+/** Settings an earlier Foundry read, which do nothing now: each is named, so a file can be tidied. */
+const RETIRED: Record<string, string> = {
+  bot_timeout_minutes: 'Foundry no longer waits on the online reviewers, so it has no timeout',
 }
 
 /** The doc folder keys, each a list of paths relative to the repository root. */
@@ -162,15 +165,19 @@ export function readConfig(text: string): { config: RepoConfig; problems: string
       config.docs = { ...config.docs, [kind]: [...new Set(paths.filter((p): p is string => p !== undefined))] }
       continue
     }
+    const retired = RETIRED[key]
+    if (retired !== undefined) {
+      problems.push(`"${key}" is no longer used: ${retired}. You can remove it.`)
+      continue
+    }
     const field = KEYS[key]
     if (field === undefined) {
       problems.push(`unknown setting "${key}" (known: ${[...Object.keys(KEYS), ...Object.keys(DOC_KEYS)].join(', ')})`)
       continue
     }
-    if (field === 'maxRounds' || field === 'botTimeoutMinutes') {
-      const isWhole = field === 'maxRounds'
-      if (typeof value !== 'number' || value <= 0 || (isWhole && !Number.isInteger(value))) {
-        problems.push(`"${key}" must be a ${isWhole ? 'whole ' : ''}number above 0`)
+    if (field === 'maxRounds') {
+      if (typeof value !== 'number' || value <= 0 || !Number.isInteger(value)) {
+        problems.push(`"${key}" must be a whole number above 0`)
         continue
       }
       config[field] = value
@@ -200,7 +207,6 @@ export function mergeSettings(plugin: Settings, repo: RepoConfig): Settings {
     maxRounds: repo.maxRounds ?? plugin.maxRounds,
     onlineReviewers: repo.onlineReviewers ?? plugin.onlineReviewers,
     maintainers: repo.maintainers ?? plugin.maintainers,
-    botTimeoutMinutes: repo.botTimeoutMinutes ?? plugin.botTimeoutMinutes,
     docs: {
       requirements: repo.docs?.requirements ?? plugin.docs.requirements,
       specifications: repo.docs?.specifications ?? plugin.docs.specifications,

@@ -87,12 +87,35 @@ export function parseState(body: string): Batch | undefined {
  * its stage, rounds, reviews and pending decision. Version 0.1.0 had no doc
  * folders: such a batch gets none, so its plan stage stays code-and-docs
  * read-only as it was, and a new batch finds the folders when it starts.
+ * Version 0.2 waited on the online reviewers: what it kept for that is dropped.
  */
 export function migrate(batch: unknown): unknown {
   if (!isObject(batch)) return batch
-  if (batch['docs'] === undefined) return { ...batch, docs: { requirements: [], specifications: [], decisions: [], user: [] } }
+  // 0.1: no doc folders.
+  const docs = batch['docs'] ?? { requirements: [], specifications: [], decisions: [], user: [] }
+  // 0.2: the gate waited on each online reviewer, with a timeout, a light per reviewer and the
+  // person's dismissals. None of it is read now: it is dropped, and so is a wait it raised.
+  const { botTimeoutMinutes: _timeout, ...rest } = batch
+  const ship = isObject(batch['ship']) ? withoutBots(batch['ship']) : batch['ship']
+  const waiting = isObject(batch['waiting']) ? withoutBotWait(batch['waiting']) : batch['waiting']
 
-  return batch
+  return { ...rest, docs, ship, waiting }
+}
+
+function withoutBots(ship: Shape): Shape {
+  const { bots: _bots, headSeenAt: _seen, dismissed: _dismissed, ...rest } = ship
+
+  return rest
+}
+
+/** The waits 0.2 raised for the online reviewers, which nothing raises now. */
+export const LEGACY_WAITS: readonly string[] = ['bot-timeout', 'bot-comment']
+
+function withoutBotWait(waiting: Shape): Shape | undefined {
+  if (LEGACY_WAITS.includes(String(waiting['kind']))) return undefined
+  const { bots: _bots, ...rest } = waiting
+
+  return rest
 }
 
 // ---------------------------------------------------------------------------
@@ -111,9 +134,8 @@ const isOneOf = (values: readonly string[]) => (v: unknown) => isString(v) && va
 
 const STAGES = ['plan', 'build', 'ship', 'done'] as const
 const VERDICT = ['ready', 'revise', 'rethink'] as const
-const WAITS = ['signoff', 'conflict', 'round-limit', 'bot-timeout', 'bot-comment', 'merge', 'tamper'] as const
+const WAITS = ['signoff', 'conflict', 'round-limit', 'merge', 'tamper'] as const
 const LIGHTS = ['pass', 'fail', 'pending', 'none'] as const
-const BOT_LIGHTS = ['waiting', 'busy', 'reviewed', 'changes', 'comment', 'dismissed', 'timeout'] as const
 
 function isReview(v: unknown): boolean {
   return (
@@ -139,8 +161,7 @@ function isWaiting(v: unknown): boolean {
     isOneOf(WAITS)(v['kind']) &&
     isString(v['summary']) &&
     isNumber(v['at']) &&
-    isOptional(v['perspectives'], p => isListOf(p, isString)) &&
-    isOptional(v['bots'], b => isListOf(b, isString))
+    isOptional(v['perspectives'], p => isListOf(p, isString))
   )
 }
 
@@ -150,14 +171,11 @@ function isShip(v: unknown): boolean {
     isInt(v['pr']) &&
     isString(v['url']) &&
     isString(v['head']) &&
-    isNumber(v['headSeenAt']) &&
     isOneOf(LIGHTS)(v['ci']) &&
     isListOf(v['checks'], c => isObject(c) && isString(c['name']) && isOneOf(LIGHTS)(c['light'])) &&
-    isListOf(v['bots'], b => isObject(b) && isString(b['login']) && isOneOf(BOT_LIGHTS)(b['light']) && isOptional(b['detail'], isString)) &&
     isInt(v['openThreads']) &&
     typeof v['isMerged'] === 'boolean' &&
     isNumber(v['checkedAt']) &&
-    isListOf(v['dismissed'], isString) &&
     isOptional(v['notice'], isString) &&
     isListOf(v['outsiders'], isString)
   )
@@ -193,7 +211,6 @@ export function isBatch(v: unknown): v is Batch {
     isListOf(v['maintainers'], isString) &&
     isObject(v['docs']) &&
     ['requirements', 'specifications', 'decisions', 'user'].every(kind => isListOf((v['docs'] as Shape)[kind], isString)) &&
-    isNumber(v['botTimeoutMinutes']) &&
     isString(v['owner']) &&
     isOptional(v['commentId'], isInt) &&
     isInt(v['rev']) &&

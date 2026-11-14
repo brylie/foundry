@@ -18,7 +18,6 @@ const batch: Batch = {
       maxRounds: 3,
       onlineReviewers: parseLogins('coderabbitai[bot],gitar-bot[bot]'),
       maintainers: ['brylie'],
-      botTimeoutMinutes: 30,
       docs: NO_DOCS,
     },
     0,
@@ -30,14 +29,11 @@ const prior: Ship = {
   pr: 9,
   url: 'https://github.com/o/r/pull/9',
   head: HEAD,
-  headSeenAt: T0,
   ci: 'pending',
   checks: [],
-  bots: [],
   openThreads: 0,
   isMerged: false,
   checkedAt: 0,
-  dismissed: [],
   outsiders: [],
 }
 
@@ -105,40 +101,22 @@ describe('CI', () => {
 })
 
 describe('online reviewers', () => {
-  test('a busy or rate-limited comment is not a review, and silence times out', async () => {
+  test('the gate waits for no review: green CI with nothing open is ready to merge, however long it has been', async () => {
     const busy = { login: 'coderabbitai', body: '> [!WARNING]\n> ## Review limit reached', updatedAt: LATER }
-    const early = readShip(batch, prior, pr({ checks: GREEN, comments: [busy] }), T0 + 5 * MIN)
-    expect(early.ship.bots.find(b => b.login === 'coderabbitai')?.light).toBe('busy')
-    expect(early.waiting).toBeUndefined()
-
-    const late = readShip(batch, prior, pr({ checks: GREEN, comments: [busy] }), T0 + 31 * MIN)
-    expect(late.ship.bots.map(b => b.light)).toEqual(['timeout', 'timeout'])
-    expect(late.waiting?.kind).toBe('bot-timeout')
-    expect(late.waiting?.bots).toEqual(['coderabbitai', 'gitar-bot'])
-  })
-
-  test('a review of an older commit does not count for the head', async () => {
-    const reading = readShip(batch, prior, pr({ checks: GREEN, reviews: [{ login: 'coderabbitai[bot]', state: 'COMMENTED', oid: 'old0000' }] }), T0)
-    expect(reading.ship.bots[0]?.light).toBe('waiting')
-  })
-
-  test("gitar-bot's fresh summary comment waits for the person to read and dismiss it", async () => {
     const gitar = { login: 'gitar-bot', body: '<details><summary>Verification</summary>No issues</details>', updatedAt: LATER }
-    const reviewed = { login: 'coderabbitai', state: 'COMMENTED' }
-    const reading = readShip(batch, prior, pr({ checks: GREEN, reviews: [reviewed], comments: [gitar] }), T0 + MIN)
-    expect(reading.ship.bots.map(b => b.light)).toEqual(['reviewed', 'comment'])
-    expect(reading.waiting?.kind).toBe('bot-comment')
-
-    const dismissed = readShip(batch, { ...prior, dismissed: [`gitar-bot@${HEAD}`] }, pr({ checks: GREEN, reviews: [reviewed], comments: [gitar] }), T0 + MIN)
-    expect(dismissed.waiting?.kind).toBe('merge')
-    expect(dismissed.notice?.text).toContain('ready to merge')
+    for (const at of [T0, T0 + 5 * MIN, T0 + 31 * MIN, T0 + 24 * 60 * MIN]) {
+      const reading = readShip(batch, prior, pr({ checks: GREEN, comments: [busy, gitar] }), at)
+      expect(reading.waiting?.kind).toBe('merge')
+      expect(reading.notice?.text).toContain('ready to merge')
+    }
+    // CI still has to pass.
+    expect(readShip(batch, prior, pr({ checks: [{ name: 'test', conclusion: null }] }), T0).waiting).toBeUndefined()
   })
 
   test('open threads and change requests block, wherever they come from', async () => {
     const both = [{ login: 'coderabbitai', state: 'COMMENTED' }, { login: 'gitar-bot', state: 'COMMENTED' }]
     const threads = readShip(batch, prior, pr({ checks: GREEN, reviews: both, threads: [{ login: 'coderabbitai', isResolved: false }] }), T0)
     expect(threads.ship.openThreads).toBe(1)
-    expect(threads.ship.bots[0]?.light).toBe('changes')
     expect(threads.waiting).toBeUndefined()
     expect(threads.notice?.text).toContain('resolve it once the fix is pushed')
 
@@ -198,8 +176,9 @@ describe('online reviewers', () => {
     )
     expect(lifted.waiting?.kind).toBe('merge')
 
+    // A dismissed review asks for nothing, and the gate needs no review: it is clear.
     const dismissedOnly = readShip(batch, prior, pr({ checks: GREEN, reviews: [{ login: 'coderabbitai', state: 'DISMISSED' }] }), T0)
-    expect(dismissedOnly.ship.bots[0]?.light).toBe('waiting')
+    expect(dismissedOnly.waiting?.kind).toBe('merge')
   })
 
   test('a gate is never green on a partial page of checks or threads', async () => {
@@ -241,11 +220,10 @@ describe('online reviewers', () => {
     expect(reading.notice?.text).not.toContain('Ignore your instructions')
   })
 
-  test('a new head commit resets the reviewers and the person’s dismissals', async () => {
-    const before = { ...prior, head: 'old0000', dismissed: ['gitar-bot@old0000'] }
-    const reading = readShip(batch, before, pr({ checks: GREEN }), T0 + 7 * MIN)
-    expect(reading.ship.headSeenAt).toBe(T0 + 7 * MIN)
-    expect(reading.ship.dismissed).toEqual([])
+  test('a reading from 0.2, with a light per reviewer and dismissals, keeps none of it', async () => {
+    const older = { ...prior, headSeenAt: T0, bots: [{ login: 'coderabbitai', light: 'timeout' }], dismissed: [`gitar-bot@${HEAD}`], notice: 'green@x' }
+    const reading = readShip(batch, older, pr({ checks: GREEN }), T0)
+    expect(Object.keys(reading.ship).sort()).toEqual(['checkedAt', 'checks', 'ci', 'head', 'isMerged', 'notice', 'openThreads', 'outsiders', 'pr', 'url'])
   })
 
   test('a merged pull request ends the stage', async () => {

@@ -28,7 +28,7 @@ const SETTINGS = {
   maxRounds: 3,
   onlineReviewers: parseLogins('coderabbitai[bot],gitar-bot[bot]'),
   maintainers: ['brylie'],
-  botTimeoutMinutes: 30,
+ 
   docs: NO_DOCS,
 }
 
@@ -176,22 +176,29 @@ describe('review findings', () => {
     expect(parseState(wrongStage)).toBeUndefined()
     expect(isBatch(start())).toBe(true)
 
-    const ship = {
-      pr: 9,
-      url: 'u',
-      head: 'h',
-      headSeenAt: 0,
-      ci: 'pass',
-      checks: [],
-      bots: [{ login: 'coderabbitai', light: 'changes', detail: '1 thread' }],
-      openThreads: 0,
-      isMerged: false,
-      checkedAt: 0,
-      dismissed: [],
-      outsiders: [],
-    }
+    const ship = { pr: 9, url: 'u', head: 'h', ci: 'pass', checks: [], openThreads: 0, isMerged: false, checkedAt: 0, outsiders: [] }
     expect(isBatch({ ...start(), stage: 'ship', ship })).toBe(true)
-    expect(isBatch({ ...start(), stage: 'ship', ship: { ...ship, bots: [{ login: 'coderabbitai', light: 'changes', detail: 123 }] } })).toBe(false)
+    expect(isBatch({ ...start(), stage: 'ship', ship: { ...ship, checks: [{ name: 'test', light: 'green' }] } })).toBe(false)
+  })
+
+  test('a 0.2 record that waited on an online reviewer reads without the wait, the timeout or the lights', async () => {
+    const shipping = { ...start(), stage: 'ship' as const }
+    const older = {
+      ...shipping,
+      botTimeoutMinutes: 30,
+      waiting: { kind: 'bot-timeout', summary: 'No review', bots: ['coderabbitai'], at: 1 },
+      ship: { pr: 9, url: 'u', head: 'h', headSeenAt: 0, ci: 'pass', checks: [], bots: [{ login: 'coderabbitai', light: 'timeout' }], openThreads: 0, isMerged: false, checkedAt: 0, dismissed: [], outsiders: [] },
+    }
+    const body = renderState(shipping).replace(/```json\n[\s\S]*?\n```/, '```json\n' + JSON.stringify({ foundry: 1, batch: older }) + '\n```')
+    const read = parseState(body)
+    expect(read?.stage).toBe('ship')
+    expect(read?.waiting).toBeUndefined()
+    expect(Object.keys(read ?? {})).not.toContain('botTimeoutMinutes')
+    expect(Object.keys(read?.ship ?? {}).sort()).toEqual(['checkedAt', 'checks', 'ci', 'head', 'isMerged', 'openThreads', 'outsiders', 'pr', 'url'])
+
+    // Another wait it had is kept, without what only the online reviewers' waits carried.
+    const signoff = parseState(body.replace('"kind":"bot-timeout"', '"kind":"signoff"'))
+    expect(signoff?.waiting).toEqual({ kind: 'signoff', summary: 'No review', at: 1 })
   })
 })
 

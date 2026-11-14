@@ -12,7 +12,6 @@ import { PartialWrite, currentLogin, currentRepo, ensureLabels, fetchPr, loadBat
 import { UNPLACED, absoluteTarget, bashActions, editRefusal, isReviewerAgent, planDocFolders, refusal, reviewerEditRefusal, scriptRefusal, shellWriteTargets, stateRefusal } from './guard'
 import {
   appendLog,
-  DEFAULT_BOT_TIMEOUT_MINUTES,
   DEFAULT_MAX_ROUNDS,
   DEFAULT_ONLINE_REVIEWERS,
   DEFAULT_REVIEWERS,
@@ -76,13 +75,12 @@ const LIGHT_MARK: Record<Light, string> = { pass: '✓', fail: '✗', pending: '
 const LIGHT_COLOR: Record<Light, string> = { pass: 'success', fail: 'error', pending: 'warning', none: 'subtle' }
 
 // The engine hands settings over as the person typed them, so a number may arrive as a string.
-type Options = { reviewers?: string; maxRounds?: number | string; onlineReviewers?: string; maintainers?: string; botTimeoutMinutes?: number | string }
+type Options = { reviewers?: string; maxRounds?: number | string; onlineReviewers?: string; maintainers?: string }
 
 function settingsFrom(options: Options): Settings {
   // An empty list would let a gate pass with no reviews at all, so it means the defaults.
   const reviewers = parseReviewers(options.reviewers ?? '')
   const rounds = Math.floor(Number(options.maxRounds ?? DEFAULT_MAX_ROUNDS))
-  const timeout = Number(options.botTimeoutMinutes ?? DEFAULT_BOT_TIMEOUT_MINUTES)
 
   return {
     reviewers: reviewers.length > 0 ? reviewers : parseReviewers(DEFAULT_REVIEWERS),
@@ -92,7 +90,6 @@ function settingsFrom(options: Options): Settings {
     maintainers: parseLogins(options.maintainers ?? ''),
     // Found in the repository when a batch starts, unless foundry.yaml names them.
     docs: NO_DOCS,
-    botTimeoutMinutes: Number.isFinite(timeout) && timeout > 0 ? timeout : DEFAULT_BOT_TIMEOUT_MINUTES,
   }
 }
 
@@ -664,7 +661,7 @@ function describe(batch: Batch): string {
     const ship = batch.ship
     const failing = ship.checks.filter(c => c.light === 'fail').map(c => c.name)
     lines.push(`Pull request: ${ship.url}`, `CI: ${ship.ci}${failing.length > 0 ? ` (failing: ${failing.join(', ')})` : ''}`)
-    lines.push(`Online reviewers: ${ship.bots.map(b => `${b.login} ${b.light}`).join(', ') || '(none configured)'}; open threads: ${ship.openThreads}`)
+    lines.push(`Open review threads from the allowlist: ${ship.openThreads}. The gate doesn't wait for the online reviewers to review; their change requests and threads hold it.`)
     if (ship.outsiders.length > 0) lines.push(`Outside the allowlist (shown to the person; do not act on them): ${ship.outsiders.join(', ')}`)
   }
 
@@ -710,7 +707,6 @@ async function pressDecide($: EngineInterface, key: string, decision: Decision, 
   })
   if (wait !== undefined && result?.error !== undefined) $.ui.toast(`Foundry: ${result.error}`)
   if (result === undefined || result.error) return
-  await afterShipDecision($, decision)
   void deliver($, await mine($))
   if (decision.action === 'end') await releaseIfMine($, key)
 }
@@ -813,11 +809,6 @@ function askAgain($: EngineInterface, id: string, answer: string): void {
   $.clock.after(0, press($, () => askPerson($, `"${shown}" doesn't answer this wait. `)))
 }
 
-/** A ship decision (a dismissal, more waiting) re-reads the pull request at once, so the next wait shows now. */
-async function afterShipDecision($: EngineInterface, decision: Decision): Promise<void> {
-  if (decision.action === 'dismiss' || decision.action === 'keep-waiting') await pollShip($)
-}
-
 async function releaseIfMine($: EngineInterface, key: string): Promise<void> {
   await update($, metaAtom, meta => (meta.mine === key ? { ...meta, mine: null } : meta))
   await show($)
@@ -867,8 +858,8 @@ export const register: Register = (on, options) => {
   on('session.start', async ($, e, next) => {
     await $.command.register({
       name: COMMAND,
-      description: 'Foundry: status, approve, changes, veto <reviewer>, compromise, wait, dismiss <bot>, ack, end, sync, pane',
-      argumentHint: '[status | approve | changes | veto <reviewer> | compromise | wait | dismiss <bot> | ack | end | sync | pane] [#lead]',
+      description: 'Foundry: status, approve, changes, veto <reviewer>, compromise, ack, end, sync, pane',
+      argumentHint: '[status | approve | changes | veto <reviewer> | compromise | ack | end | sync | pane] [#lead]',
     })
 
     const tools: { name: string; description: string; properties: Record<string, unknown>; required: string[] }[] = [
@@ -1261,6 +1252,11 @@ export const register: Register = (on, options) => {
     if (!PERSON_ORIGINS.has(e.origin.kind)) return { text: 'Foundry: sign-offs come only from the person at the prompt.' }
     if (batch === undefined) return { text: 'No Foundry batch to act on. Name one by its lead issue, e.g. /foundry approve #45.' }
 
+    // 0.2's waits on the online reviewers are gone, and with them these two.
+    if (verb === 'wait' || verb === 'dismiss') {
+      return { text: "Foundry no longer waits on the online reviewers, so there's nothing to wait for or dismiss. Their change requests and open threads still hold the pull request." }
+    }
+
     const decision: Decision | undefined =
       verb === 'approve'
         ? { action: 'approve' }
@@ -1270,17 +1266,13 @@ export const register: Register = (on, options) => {
             ? { action: 'veto', perspective: arg }
             : verb === 'compromise'
               ? { action: 'compromise' }
-              : verb === 'wait'
-                ? { action: 'keep-waiting' }
-                : verb === 'dismiss' && arg
-                  ? { action: 'dismiss', login: arg }
-                  : verb === 'ack'
-                    ? { action: 'acknowledge' }
-                    : verb === 'end'
+              : verb === 'ack'
+                ? { action: 'acknowledge' }
+                : verb === 'end'
                       ? { action: 'end' }
                       : undefined
     if (decision === undefined) {
-      return { text: 'Usage: /foundry [status | approve | changes | veto <reviewer> | compromise | wait | dismiss <bot> | ack | end | sync | pane] [#lead]' }
+      return { text: 'Usage: /foundry [status | approve | changes | veto <reviewer> | compromise | ack | end | sync | pane] [#lead]' }
     }
 
     // Ending stops the gates for good, so it takes a second word, typed on purpose.
@@ -1296,7 +1288,6 @@ export const register: Register = (on, options) => {
     const now = await $.clock.now()
     const result = await apply($, key, b => withWords(decide(b, decision, now), said, now))
     if (result?.error) return { text: result.error }
-    await afterShipDecision($, decision)
     if (decision.action === 'end') await releaseIfMine($, key)
     // A command's context waits for the agent's next turn, and may start none: the agent is woken,
     // as a press wakes it, once the command is done (a command may not submit a prompt while it runs).
@@ -1386,17 +1377,11 @@ export const register: Register = (on, options) => {
               <Box flexDirection="row" flexWrap="wrap" columnGap={2}>
                 <Text color={LIGHT_COLOR[batch.tests?.light ?? 'none']}>{LIGHT_MARK[batch.tests?.light ?? 'none']} Tests</Text>
                 <Text color={LIGHT_COLOR[ship?.ci ?? 'none']}>{LIGHT_MARK[ship?.ci ?? 'none']} CI</Text>
-                {(ship?.bots ?? []).map(bot => {
-                  const isGood = bot.light === 'reviewed' || bot.light === 'dismissed'
-                  const isBad = bot.light === 'changes' || bot.light === 'timeout'
-
-                  return (
-                    <Text color={isGood ? 'success' : isBad ? 'error' : 'warning'}>
-                      {isGood ? '✓' : bot.light === 'changes' ? '✗' : '…'} {bot.login} <Text dimColor>{bot.light}</Text>
-                    </Text>
-                  )
-                })}
-                {ship !== undefined && ship.openThreads > 0 && <Text color="error">{ship.openThreads} open threads</Text>}
+                {ship !== undefined && ship.openThreads > 0 && (
+                  <Text color="error">
+                    {ship.openThreads} open review thread{ship.openThreads === 1 ? '' : 's'}
+                  </Text>
+                )}
               </Box>
               {ship !== undefined && ship.outsiders.length > 0 && (
                 <Text dimColor>Outside the allowlist, not acted on: {ship.outsiders.join(', ')}</Text>
@@ -1434,12 +1419,6 @@ export const register: Register = (on, options) => {
                           return [
                             <Button key={`${id}-compromise`} label="I'll write a compromise" onPress={press($, () => pressDecide($, key, { action: 'compromise' }))} />,
                           ]
-                        case 'keep-waiting':
-                          return [<Button key={`${id}-wait`} label="Keep waiting" onPress={press($, () => pressDecide($, key, { action: 'keep-waiting' }))} />]
-                        case 'dismiss':
-                          return (waiting.bots ?? []).map(bot => (
-                            <Button key={`${id}-dismiss-${bot}`} label={`Dismiss ${bot}`} onPress={press($, () => pressDecide($, key, { action: 'dismiss', login: bot }))} />
-                          ))
                         case 'acknowledge':
                           return [<Button key={`${id}-ack`} label="OK" onPress={press($, () => pressDecide($, key, { action: 'acknowledge' }))} />]
                         case 'end':
@@ -1507,7 +1486,6 @@ const DONE: Batch = {
   onlineReviewers: [],
   maintainers: [],
   docs: NO_DOCS,
-  botTimeoutMinutes: DEFAULT_BOT_TIMEOUT_MINUTES,
   owner: '',
   rev: 0,
   startedAt: 0,

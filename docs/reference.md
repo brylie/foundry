@@ -44,8 +44,6 @@ The skills read the project's own rules (`AGENTS.md`, `CLAUDE.md`, `CONTRIBUTING
 | `/foundry changes [what to change]` | Sends it back for another round. What you write after it reaches the agent as yours. |
 | `/foundry veto <reviewer>` | Settles a conflict or a round limit by overruling one reviewer for this stage. |
 | `/foundry compromise [the compromise]` | Settles a conflict. Write the compromise after it, or in the chat. |
-| `/foundry wait` | Keeps waiting for a silent online reviewer. |
-| `/foundry dismiss <bot>` | Dismisses an online reviewer for the current commit. |
 | `/foundry ack` | Acknowledges state that was restored after an outside edit. |
 | `/foundry end` | Ends the batch: its gates stop guarding, and it can't be undone, so it asks you to type `/foundry end #<lead> confirm`. The card's **End batch…** asks too. |
 | `/foundry sync` | Reads every open batch from GitHub now, and reports anything not yet saved. |

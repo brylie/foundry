@@ -1,8 +1,9 @@
 // The ship stage's gates, judged only from facts GitHub records: the check
-// rollup, the reviews and review threads on the head commit, and each online
-// reviewer's own comment. Nothing here asks the agent's opinion.
+// rollup, and the reviews and review threads on the head commit. Nothing here
+// asks the agent's opinion, and nothing waits for an online reviewer to
+// review: its review shows up as a change request or a thread, or not at all.
 
-import type { Batch, BotState, Check, Light, Ship, Waiting } from '../types'
+import type { Check, Light, Batch, Ship, Waiting } from '../types'
 import { allowlist, loginKey } from './model'
 
 /** The pull request as the GraphQL query in github.ts returns it. */
@@ -38,13 +39,6 @@ type Rollup = {
 const PASS = new Set(['SUCCESS', 'NEUTRAL', 'SKIPPED'])
 const FAIL = new Set(['FAILURE', 'TIMED_OUT', 'CANCELLED', 'ACTION_REQUIRED', 'STARTUP_FAILURE', 'ERROR', 'STALE'])
 
-/**
- * A reviewer's comment that says it has not reviewed yet: still working, or
- * stopped by a rate limit (coderabbit's "Review limit reached", gitar's
- * "Gitar is working").
- */
-const BUSY = /review limit reached|rate[- ]limit|is working|in progress|reviewing (?:your|this)|currently processing|will review shortly/i
-
 function checkLight(node: Rollup['contexts']['nodes'][number]): Check {
   if (node.__typename === 'CheckRun') {
     if (node.status !== 'COMPLETED') return { name: node.name, light: 'pending' }
@@ -66,12 +60,6 @@ export function ciLight(checks: Check[]): Light {
   return 'pass'
 }
 
-function time(text: string | undefined): number {
-  const ms = text ? Date.parse(text) : NaN
-
-  return Number.isNaN(ms) ? 0 : ms
-}
-
 export type ShipReading = {
   ship: Ship
   /** The ship wait to show, when no decision of another kind is pending. */
@@ -85,9 +73,6 @@ export type ShipReading = {
 export function readShip(batch: Batch, prior: Ship, pr: PrData, now: number): ShipReading {
   const head = pr.headRefOid
   const commit = pr.commits.nodes[0]?.commit
-  const headAt = time(commit?.committedDate)
-  const isNewHead = head !== prior.head
-  const headSeenAt = isNewHead ? now : prior.headSeenAt
 
   const checks = (commit?.statusCheckRollup?.contexts.nodes ?? []).map(checkLight)
   // More checks than one page holds: a failure could be on the next page, so it is never read as green.
@@ -148,37 +133,16 @@ export function readShip(batch: Batch, prior: Ship, pr: PrData, now: number): Sh
     threadsBy.set(login, (threadsBy.get(login) ?? 0) + 1)
   }
 
-  const timeoutMs = batch.botTimeoutMinutes * 60_000
-  const bots: BotState[] = batch.onlineReviewers.map(login => {
-    if (prior.dismissed.includes(`${login}@${head}`)) return { login, light: 'dismissed' }
-    if (changesBy.includes(login)) return { login, light: 'changes', detail: 'requested changes' }
-    const threads = threadsBy.get(login) ?? 0
-    if (threads > 0) return { login, light: 'changes', detail: `${threads} thread${threads === 1 ? '' : 's'} open or awaiting re-review` }
-    if (reviewedBy.has(login)) return { login, light: 'reviewed' }
-
-    const comment = [...pr.comments.nodes].reverse().find(c => c.author && loginKey(c.author.login) === login)
-    const isFresh = comment !== undefined && time(comment.updatedAt) >= headAt
-    const isBusy = isFresh && BUSY.test(comment.body)
-    const isLate = now - headSeenAt >= timeoutMs
-    if (isFresh && !isBusy) return { login, light: 'comment', detail: 'left a comment on this commit' }
-    if (isLate) return { login, light: 'timeout', detail: isBusy ? 'busy or rate-limited' : 'no review yet' }
-
-    return { login, light: isBusy ? 'busy' : 'waiting' }
-  })
-
   const ship: Ship = {
-    ...prior,
     pr: pr.number,
     url: pr.url,
     head,
-    headSeenAt,
     ci,
     checks,
-    bots,
     openThreads: openThreads.length,
     isMerged: pr.state === 'MERGED',
     checkedAt: now,
-    dismissed: isNewHead ? prior.dismissed.filter(d => !d.endsWith(`@${prior.head}`)) : prior.dismissed,
+    ...(prior.notice === undefined ? {} : { notice: prior.notice }),
     outsiders: (() => {
       for (const comment of pr.comments.nodes) isTrusted(comment.author)
 
@@ -189,27 +153,12 @@ export function readShip(batch: Batch, prior: Ship, pr: PrData, now: number): Sh
   if (ship.isMerged) return { ship, isMerged: true }
 
   const short = head.slice(0, 7)
-  const timedOut = bots.filter(b => b.light === 'timeout').map(b => b.login)
-  const toRead = bots.filter(b => b.light === 'comment').map(b => b.login)
-  const isBlocked = changesBy.length > 0 || openThreads.length > 0 || bots.some(b => b.light === 'changes')
-  const isGreen = ci === 'pass' && !isPartialThreads && !isBlocked && bots.every(b => b.light === 'reviewed' || b.light === 'dismissed')
+  const isBlocked = changesBy.length > 0 || openThreads.length > 0
+  const isGreen = ci === 'pass' && !isPartialThreads && !isBlocked
 
-  let waiting: ShipReading['waiting']
-  if (timedOut.length > 0) {
-    waiting = {
-      kind: 'bot-timeout',
-      bots: timedOut,
-      summary: `No review of ${short} after ${batch.botTimeoutMinutes} minutes from ${timedOut.join(', ')}. Keep waiting, or dismiss them for this commit.`,
-    }
-  } else if (toRead.length > 0) {
-    waiting = {
-      kind: 'bot-comment',
-      bots: toRead,
-      summary: `${toRead.join(', ')} left a comment on ${short} rather than a review. Read it on the pull request, then dismiss it here if nothing needs changing.`,
-    }
-  } else if (isGreen) {
-    waiting = { kind: 'merge', summary: `CI is green and every online reviewer has passed ${short}. Merging is yours.` }
-  }
+  const waiting: ShipReading['waiting'] = isGreen
+    ? { kind: 'merge', summary: `CI is green on ${short}, and no change request or review thread is open. Merging is yours.` }
+    : undefined
 
   let notice: ShipReading['notice']
   const failed = checks.filter(c => c.light === 'fail').map(c => c.name)
