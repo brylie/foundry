@@ -181,8 +181,16 @@ function engine(on: On) {
   })
   on('session.start', (_, e) => ({ cwd: e.cwd }))
   on('turn.complete', (_, e) => ({ text: e.answer }))
-  /** Foundry's questions to the person, and how the next one is answered: a label, typed words, or dismissed. */
-  const asks = { questions: [] as string[], answer: undefined as string | undefined, held: undefined as Promise<void> | undefined }
+  /**
+   * Foundry's questions to the person, and how each is answered: a label, typed words, or dismissed.
+   * `answer` answers every question; `answerAt`, when set, answers the question at that index instead.
+   */
+  const asks = {
+    questions: [] as string[],
+    answer: undefined as string | undefined,
+    answerAt: undefined as ((index: number) => string | undefined) | undefined,
+    held: undefined as Promise<void> | undefined,
+  }
   /** The files of the checkout `$.fs.read` finds, by absolute path. */
   const files = new Map<string, string>()
   on('fs.read', (_, e) => {
@@ -195,12 +203,13 @@ function engine(on: On) {
     if (e.tool === 'Bash') ran.push(e.command)
     if (e.tool === 'AskUserQuestion') {
       const question = (e as unknown as { questions: { question: string }[] }).questions[0]?.question ?? ''
-      asks.questions.push(question)
+      const index = asks.questions.push(question) - 1
       // A question the person leaves open answers only once the test lets it.
       if (asks.held) await asks.held
-      if (asks.answer === undefined) return { deny: 'dismissed' }
+      const answer = asks.answerAt ? asks.answerAt(index) : asks.answer
+      if (answer === undefined) return { deny: 'dismissed' }
 
-      return { result: { answers: { [question]: asks.answer } } }
+      return { result: { answers: { [question]: answer } } }
     }
 
     return { result: {} }
@@ -400,6 +409,40 @@ test('a question answered after its gate was decided elsewhere decides nothing, 
 
   expect(hub.state(12)?.stage).toBe('build')
   expect(hub.state(12)?.waiting?.kind).toBe('signoff')
+})
+
+test("a reviewer's comment question left open is no answer to the same kind of comment on a newer head", async ($, on) => {
+  const { hub, asks, clock } = engine(on)
+  let answer = () => {}
+  asks.held = new Promise<void>(resolve => (answer = resolve))
+  hub.setConfig('online_reviewers:\n  - coderabbitai[bot]\n  - gitar-bot[bot]\nmaintainers: [maintainer]\n')
+  await toShip($)
+  expect(hub.state(12)?.waiting?.kind).toBe('bot-comment')
+  void clock.advance(60_000)
+  await clock.settle()
+  expect(asks.questions).toHaveLength(1)
+
+  // A push: a new head, and gitar-bot's fresh summary on it, the same kind of wait.
+  const newHead = 'cafe0000b2'
+  hub.setPr({
+    headRefOid: newHead,
+    reviews: { nodes: [{ author: { login: 'coderabbitai' }, state: 'COMMENTED', submittedAt: '', commit: { oid: newHead } }] },
+    comments: { nodes: [{ author: { login: 'gitar-bot' }, body: 'Verification: no issues', updatedAt: new Date(5_000_000).toISOString() }] },
+  })
+  void clock.advance(60_000)
+  await clock.settle()
+  expect(hub.state(12)?.ship?.head).toBe(newHead)
+  expect(hub.state(12)?.waiting?.kind).toBe('bot-comment')
+
+  // The new head's comment is a wait of its own: the person is asked about it afresh.
+  expect(asks.questions).toHaveLength(2)
+
+  // The old head's question is answered at last, the new one left open: it dismisses nothing on the new head.
+  asks.answerAt = index => (index === 0 ? 'Dismiss gitar-bot' : undefined)
+  answer()
+  await clock.settle()
+  expect(hub.state(12)?.waiting?.kind).toBe('bot-comment')
+  expect(hub.state(12)?.ship?.dismissed).not.toContain(`gitar-bot@${newHead}`)
 })
 
 test("a card shows the batch's plan file from this checkout, at a press", async ($, on) => {
@@ -953,6 +996,22 @@ test('a doc folder that is itself a link still takes its plan-loop edits, by Edi
   // The link's target outside the doc folders is still code.
   expect((await $.tool.call({ tool: 'Write', file_path: '/repo/product/../src/a.ts', content: 'x', agentId: 'po-1' })).deny).toContain("doesn't edit")
   expect(ran).toEqual(['printf x >> docs/product/slots.md', 'printf x >> docs/product/slots.md'])
+})
+
+test('a plan folder that is a link still takes the plan, by Edit and by shell, and nothing else', async ($, on) => {
+  const { ran } = engine(on)
+  // docs/plans is a link to /repo/plan-files.
+  on('fs.stat', (_, e) => ({
+    value: { kind: 'file', size: 0, mtimeMs: 0, isLink: false, realPath: e.path.replace(/^\/repo\/docs\/plans(?=\/|$)/, '/repo/plan-files') } as never,
+  }))
+  await $.session.start({ cwd: '/repo', surface: 'desktop', isInteractive: true })
+  await $.tool.call({ tool: 'mcp__foundry__batch_start', title: 'T', issues: [12] })
+
+  expect((await $.tool.call({ tool: 'Write', file_path: '/repo/docs/plans/12.md', content: '# Plan' })).deny).toBeUndefined()
+  expect((await $.tool.call({ tool: 'Bash', command: 'printf x >> docs/plans/12.md' })).deny).toBeUndefined()
+  // Another file through the same link is still held.
+  expect((await $.tool.call({ tool: 'Write', file_path: '/repo/docs/plans/13.md', content: 'x' })).deny).toContain('no approved plan')
+  expect(ran).toEqual(['printf x >> docs/plans/12.md'])
 })
 
 test('with no batch, nothing is guarded but merging, and the panel says so', async ($, on) => {

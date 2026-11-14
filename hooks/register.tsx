@@ -595,6 +595,11 @@ async function realPath($: EngineInterface, path: string): Promise<string> {
   }
 }
 
+/** The batch's plan file as a real path, links resolved, to compare with a write's real path. */
+async function realPlanFile($: EngineInterface, batch: Batch | undefined, root: string): Promise<string | undefined> {
+  return isActive(batch) ? realPath($, `${root}/${planPath(batch)}`) : undefined
+}
+
 /** The plan-loop doc folders as real paths, links resolved, to compare with a write's real path. */
 async function realDocFolders($: EngineInterface, batch: Batch | undefined, root: string): Promise<string[] | undefined> {
   if (!isActive(batch)) return undefined
@@ -683,11 +688,15 @@ async function pressDecide($: EngineInterface, key: string, decision: Decision, 
   if (decision.action === 'end') await releaseIfMine($, key)
 }
 
-/** Which wait the batch is in: its batch, stage, round and kind, and when it began; undefined when nothing waits. */
+/**
+ * Which wait the batch is in: its batch, stage, round, kind and pull request
+ * head commit, and when it began; undefined when nothing waits. The head is in
+ * it because a push can bring a wait of the same kind, keeping its start.
+ */
 function waitIdentity(batch: Batch): string | undefined {
   const w = batch.waiting
 
-  return w === undefined ? undefined : `${batchKey(batch)}:${batch.stage}:${currentRound(batch)}:${w.kind}:${w.at}`
+  return w === undefined ? undefined : `${batchKey(batch)}:${batch.stage}:${currentRound(batch)}:${w.kind}:${batch.ship?.head ?? ''}:${w.at}`
 }
 
 // The waits this module has asked about, by batch and wait: each is asked once, and a dismissed
@@ -1082,7 +1091,7 @@ export const register: Register = (on, options) => {
       if (why) return { deny: why }
     }
     if (!isActive(batch)) return next(e)
-    const why = editRefusal(batch, root, real, await realDocFolders($, batch, root))
+    const why = editRefusal(batch, root, real, await realDocFolders($, batch, root), await realPlanFile($, batch, root))
 
     return why ? { deny: why } : next(e)
   }).catch(($, e, next) => (next.called ? next(e) : { deny: FAILED }))
@@ -1106,6 +1115,7 @@ export const register: Register = (on, options) => {
       const root = await realPath($, await repoRoot($))
       const cwd = await $.session.cwd()
       const folders = await realDocFolders($, batch, root)
+      const plan = await realPlanFile($, batch, root)
       for (const target of shellWriteTargets(e.command)) {
         const placed = absoluteTarget(target, cwd)
         // A target the guard can't place ($VAR, ~, a substitution) is judged as a write into the repository.
@@ -1115,7 +1125,7 @@ export const register: Register = (on, options) => {
         const within = placed === undefined ? [] : folders
         const why = isReviewer
           ? reviewerEditRefusal(isActive(batch) ? batch : undefined, root, path, within)
-          : editRefusal(batch as Batch, root, path, within)
+          : editRefusal(batch as Batch, root, path, within, plan)
         if (why) {
           const where = placed === undefined ? `${target}, which Foundry can't place: name the path literally` : target
 
