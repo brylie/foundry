@@ -520,6 +520,50 @@ test('a wait with more than four choices groups the reviewers to overrule, and a
   expect(hub.state(12)?.vetoes).toEqual(['architecture'])
 })
 
+test('a batch ended by command still tells the agent, and only a later #N in the words stays the person’s', async ($, on) => {
+  const { hub, prompts, clock } = engine(on)
+  await toPlanSignoff($)
+  await $.command.run({ command: 'foundry', args: 'changes #12 explain why #12 fails', origin: { kind: 'bridge' }, presentation: SHOWN })
+  expect(hub.state(12)?.log.some(e => e.isForAgent === true && e.text === 'The person wrote: explain why #12 fails')).toBe(true)
+  await clock.settle()
+
+  // The end's own wake carries its news: the batch is let go only after it.
+  await $.command.run({ command: 'foundry', args: 'end #12 confirm', origin: { kind: 'bridge' }, presentation: SHOWN })
+  await clock.settle()
+  expect(hub.state(12)?.stage).toBe('done')
+  expect(prompts.at(-1)).toContain('Ended by the person.')
+})
+
+test('the question asks before it ends a batch, and a command it names, typed under Other, decides', { options: { maxRounds: 1 } }, async ($, on) => {
+  const { hub, asks, clock } = engine(on)
+  await toShip($)
+  // At the ship round limit, a send-back escalates: Send back anyway, or End batch.
+  await $.tool.call({ tool: 'mcp__foundry__send_back', reason: 'ci-failure', summary: 'unit tests' })
+  expect(hub.state(12)?.waiting?.kind).toBe('round-limit')
+
+  asks.answerAt = index => (index === 0 ? 'End batch' : 'Keep batch')
+  await clock.advance(60_000)
+  await clock.settle()
+  expect(asks.questions[1]).toContain("Its gates stop guarding, and it can't be undone.")
+  expect(hub.state(12)?.stage).toBe('ship')
+  expect(hub.state(12)?.waiting?.kind).toBe('round-limit')
+})
+
+test('a reviewer typed from the commands the second question names is overruled', { options: { maxRounds: 1 } }, async ($, on) => {
+  const { hub, asks, clock } = engine(on)
+  await $.session.start({ cwd: '/repo', surface: 'desktop', isInteractive: true })
+  await $.tool.call({ tool: 'mcp__foundry__batch_start', title: 'T', issues: [12] })
+  for (const perspective of [...REVIEWERS, 'usability']) {
+    await $.tool.call({ tool: 'mcp__foundry__review_record', perspective, reviewer: `foundry:${perspective}`, verdict: 'revise', summary: 'no' })
+  }
+  // Security is past the four the second question offers: it is named, to type.
+  asks.answerAt = index => (index === 0 ? 'Overrule a reviewer…' : index === 1 ? '/Foundry Veto security #12' : undefined)
+  await clock.advance(60_000)
+  await clock.settle()
+
+  expect(hub.state(12)?.vetoes).toEqual(['security'])
+})
+
 test('ending a batch asks first, on the card and by command', async ($, on) => {
   const { hub } = engine(on)
   await $.session.start({ cwd: '/repo', surface: 'desktop', isInteractive: true })
