@@ -42,7 +42,7 @@ By default six reviewers must approve each loop: **product owner, usability, acc
 - **Counters reset forward.** The round counter resets when work moves to the next stage.
 - **CI failures count.** A CI failure or a change request on the pull request counts as a ship round. A plain rerun of a flaky test does not.
 - **Conflicts escalate.** When reviewers want things that can't both hold, the decision comes to you. You veto one, which then counts as approved for that stage, or you write a compromise.
-- **Sign-off is yours alone.** Sign-offs come only from the panel's buttons, your answer to the question Foundry asks you, or your own `/foundry` command. A GitHub comment never counts as one, even under your account (some reviewer bots post as you), and neither does a message from another session or a plain "approved" in the chat.
+- **Sign-off is yours alone.** Sign-offs come only from the buttons on a Foundry card (in the panel, or under the agent's request in the conversation), your answer to the question Foundry asks you, or your own `/foundry` command. A GitHub comment never counts as one, even under your account (some reviewer bots post as you), and neither does a message from another session or a plain "approved" in the chat.
 - **Decide from anywhere.** When a batch waits on you, Foundry asks you in a question card as the agent's turn ends: Approve or Request changes for a sign-off, the buttons' choices for the other waits. It shows wherever you follow the session, your phone included, where the panel doesn't, and it offers every choice: past four, pick "Overrule a reviewer…" and a second question asks which. Words you type under "Other" ask for changes, or for a conflict are the compromise, and reach the agent as yours. Words that decide nothing in a wait aren't lost: the question is asked again, saying so. A wait with one choice also offers **Not yet**, which leaves it open. A question you dismiss isn't asked again, and the agent's message names the command to type instead, such as `/foundry approve #12`, which works from your phone too.
 
 ## Documentation first
@@ -93,4 +93,12 @@ Each button's name, which a screen reader reads, says which batch it acts on, su
 
 Every button has a `/foundry` command too; see [Reference](reference.md#the-foundry-command). Each card also has a **Plan** button that shows the batch's plan file.
 
-The panel shows on the desktop app and in the terminal. On your phone, answer in the question card Foundry asks, or type the command.
+The panel shows on the desktop app and in the terminal. On your phone, decide on the card in the conversation (below), answer the question card Foundry asks, or type the command.
+
+## The card in the conversation
+
+When the agent asks you to sign off, raises a reviewer conflict, or hits a round limit, a small decision card appears under that call in the conversation. The conversation shows wherever you follow the session, so the card does too: the terminal, the desktop app, VS Code, and the Claude mobile app over Remote Control, where the panel doesn't show.
+
+The card says what waits and for how long. Its buttons are the panel's, with the same names (see the table above), and below them is the `/foundry` command that does the same, such as `/foundry approve #12`. On a ship round limit, **End batch…** asks you to confirm first, as it does in the panel.
+
+Each card answers only the wait its call opened. Once that wait is decided, wherever you decided it, the card reads "Foundry: decided." and has no buttons. A later wait of the same kind, such as the build sign-off after the plan sign-off, gets its card under its own call. So a card left open on your phone can't decide a newer question by mistake: a press that arrives after its wait was decided does nothing, and Foundry says so.

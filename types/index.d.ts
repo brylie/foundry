@@ -171,12 +171,27 @@ export type Meta = {
   syncedAt: number
 }
 
+/**
+ * A tool row in the transcript that opened a wait: the agent's sign-off
+ * request, say. The row draws that wait's decision card while the wait is the
+ * batch's current one, and "Decided" once it is not.
+ */
+export type WaitRow = {
+  /** The tool call's `tool_use_id`: the row's id. */
+  id: string
+  /** The batch's key (`owner/repo#lead`). */
+  key: string
+  /** The wait the call opened, as `waitIdentity` names it. */
+  wait: string
+}
+
 declare module 'claude-code' {
   interface PluginState {
     /**
      * `plansShown`: the batches whose card shows its plan. `ending`: the batches whose card asks
-     * to confirm ending them. Both by key, the panel's own, never written to GitHub.
+     * to confirm ending them. Both by key, the panel's own, never written to GitHub. `rows`: the
+     * tool rows that opened a wait, newest last, this session's own.
      */
-    foundry: { batches: Shaped<Batch[]>; meta: Shaped<Meta>; plansShown: Shaped<string[]>; ending: Shaped<string[]> }
+    foundry: { batches: Shaped<Batch[]>; meta: Shaped<Meta>; plansShown: Shaped<string[]>; ending: Shaped<string[]>; rows: Shaped<WaitRow[]> }
   }
 }

@@ -4,6 +4,7 @@ Foundry's notable changes, newest first. Versions follow [Semantic Versioning](h
 
 ## Unreleased
 
+- **A decision card in the conversation.** When the agent requests a sign-off, raises a reviewer conflict, or hits a round limit, a card with the panel's buttons appears under that call. It shows on every surface, the Claude mobile app included, where the panel doesn't. Each card answers only the wait its call opened: once that wait is decided it reads "Foundry: decided.", and a press that arrives too late decides nothing.
 - **A wait finds you.** When a batch starts waiting, the session that runs it sends a notification through your own channel, taken back once you decide. The toast stays 15 seconds instead of 4, a line in the transcript keeps it, and the panel opens where one shows.
 - **The card, clearer.**
   - The "waiting on you" alert comes first, says how long it has waited, and puts its buttons above the detail.

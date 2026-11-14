@@ -155,7 +155,14 @@ function engine(on: On) {
   const gate: { pattern?: RegExp; open: () => void } = { open: () => {} }
   const clock = mock.clock(on)
   on('ui.status', () => ({ value: undefined }))
-  on('ui.log', () => ({ value: undefined }))
+  /** The tool rows that opened a wait, by their id, newest last, as the mod's debug log names them. */
+  const rows: string[] = []
+  on('ui.log', (_, e) => {
+    const opened = /^Foundry: tool row (\S+) opened the wait /.exec(e.text)
+    if (e.to === 'debug' && opened?.[1] !== undefined) rows.push(opened[1])
+
+    return { value: undefined }
+  })
   /** The person's notifications, as their channel holds them: sent by key, and taken back. */
   const notes = { sent: [] as { text: string; key?: string }[], taken: [] as string[] }
   on('ui.notify', (_, e) => {
@@ -232,7 +239,7 @@ function engine(on: On) {
     return { result: {} }
   })
 
-  return { hub, prompts, ran, submit, clock, gate, asks, files, notes }
+  return { hub, prompts, ran, submit, clock, gate, asks, files, notes, rows }
 }
 
 async function approveAll($: Engine) {
@@ -1286,4 +1293,127 @@ test('with no batch, nothing is guarded but merging, and the panel says so', asy
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
   expect((await ui.find({ type: 'Text', text: /No Foundry batches/ }))?.text).toBe('No Foundry batches')
   await ui.unmount()
+})
+
+// ---------------------------------------------------------------------------
+// The decision card under the agent's own tool row, in the transcript.
+
+const SURFACES = ['terminal', 'desktop', 'vscode', 'mobile'] as const
+/** The id of the newest tool row that opened a wait. */
+function lastRow(rows: string[]): string {
+  const id = rows.at(-1)
+  expect(id).toBeDefined()
+
+  return id ?? ''
+}
+
+/** A tool's row in the transcript, as the engine asks the plugins to draw it once the call has resolved. */
+function toolRow(tool: string, id: string, input: Record<string, unknown> = {}) {
+  return {
+    plugin: 'foundry',
+    component: 'ToolUse',
+    requestId: id,
+    props: { tool_use_id: id, tool, input, isRunning: false, isErrored: false, isInterrupted: false },
+  } as const
+}
+
+test("the agent's sign-off row draws the wait's card on every surface, and a press there decides it", async ($, on) => {
+  const { hub, prompts, rows } = engine(on)
+  await toPlanSignoff($)
+  const id = lastRow(rows)
+  const row = toolRow('mcp__foundry__signoff_request', id, { summary: 'Two issues, one shared slot type.' })
+
+  for (const surface of SURFACES) {
+    const ui = await $.ui.mount({ ...row, surface })
+    expect(await ui.find({ type: 'Text', text: /Waiting on you: Plan sign-off · just now/ })).toBeDefined()
+    // The panel's buttons, by the panel's keys and accessible names, and the typed commands beside them.
+    expect((await ui.find({ key: '12-approve' }))?.props).toMatchObject({ label: 'Approve: T', variant: 'primary' })
+    expect((await ui.find({ key: '12-changes' }))?.text).toBe('Request changes')
+    expect(await ui.find({ type: 'Text', text: /Or type \/foundry approve #12 · \/foundry changes #12/ })).toBeDefined()
+    // In the mobile app, the border on the Box that holds the row is what asks for a card under it.
+    if (surface === 'mobile') expect((await ui.find({ type: 'Box' }))?.props).toMatchObject({ borderStyle: 'round' })
+    await ui.unmount()
+  }
+
+  // Pressed in the mobile app, over Remote Control: the sign-off is decided and the agent woken.
+  const phone = await $.ui.mount({ ...row, surface: 'mobile' })
+  await phone.press({ key: '12-approve' })
+  expect(hub.state(12)?.stage).toBe('build')
+  expect(prompts.at(-1)).toContain('approved the plan')
+  await phone.unmount()
+
+  // Decided, the row says so and offers nothing more.
+  for (const surface of SURFACES) {
+    const ui = await $.ui.mount({ ...row, surface })
+    expect(await ui.find({ type: 'Text', text: /Foundry: decided\./ })).toBeDefined()
+    expect(await ui.find({ key: '12-approve' })).toBeUndefined()
+    await ui.unmount()
+  }
+})
+
+test("an earlier sign-off's row offers nothing once decided, not even the sign-off that followed it", async ($, on) => {
+  const { hub, rows } = engine(on)
+  await toPlanSignoff($)
+  const plan = toolRow('mcp__foundry__signoff_request', lastRow(rows))
+  // The plan's card, open on the phone while the person decides at the desk.
+  const phone = await $.ui.mount({ ...plan, surface: 'mobile' })
+  expect(await phone.find({ key: '12-approve' })).toBeDefined()
+
+  await $.command.run({ command: 'foundry', args: 'approve #12', origin: { kind: 'composer' }, presentation: SHOWN })
+  await approveAll($)
+  await $.tool.call({ tool: 'mcp__foundry__signoff_request', summary: 'The change' })
+  const build = toolRow('mcp__foundry__signoff_request', lastRow(rows))
+  expect(build.requestId).not.toBe(plan.requestId)
+
+  // The batch waits again, on a sign-off of the same kind: the plan's row stays decided, its buttons gone.
+  expect(await phone.find({ type: 'Text', text: /Foundry: decided\./ })).toBeDefined()
+  expect(await phone.find({ key: '12-approve' })).toBeUndefined()
+  expect(await phone.find({ key: '12-changes' })).toBeUndefined()
+  await phone.unmount()
+  expect(hub.state(12)?.stage).toBe('build')
+  expect(hub.state(12)?.waiting?.kind).toBe('signoff')
+
+  // The build sign-off is answered under its own row.
+  const now = await $.ui.mount({ ...build, surface: 'mobile' })
+  expect(await now.find({ type: 'Text', text: /Waiting on you: Build sign-off/ })).toBeDefined()
+  await now.press({ key: '12-changes' })
+  await now.unmount()
+  expect(hub.state(12)?.stage).toBe('build')
+  expect(hub.state(12)?.waiting).toBeUndefined()
+})
+
+test('a conflict and the round limit draw their cards under the rows that raised them; other rows draw as they are', { options: { maxRounds: 2 } }, async ($, on) => {
+  const { hub, rows } = engine(on)
+  await $.session.start({ cwd: '/repo', surface: 'desktop', isInteractive: true })
+  await $.tool.call({ tool: 'mcp__foundry__batch_start', title: 'T', issues: [12] })
+
+  // A sign-off the mod refused opened no wait, so its row gets no card.
+  expect((await $.tool.call({ tool: 'mcp__foundry__signoff_request', summary: 'early' })).deny).toContain('Not yet')
+  expect(rows).toEqual([])
+
+  await $.tool.call({ tool: 'mcp__foundry__conflict_raise', perspectives: ['usability', 'security'], summary: 'They disagree' })
+  const conflict = await $.ui.mount({ ...toolRow('mcp__foundry__conflict_raise', lastRow(rows)), surface: 'mobile' })
+  expect(await conflict.find({ type: 'Text', text: /Waiting on you: Reviewer conflict/ })).toBeDefined()
+  expect(await conflict.find({ key: '12-veto-usability' })).toBeDefined()
+  expect(await conflict.find({ key: '12-compromise' })).toBeDefined()
+  await conflict.press({ key: '12-veto-security' })
+  expect(await conflict.find({ type: 'Text', text: /Foundry: decided\./ })).toBeDefined()
+  await conflict.unmount()
+  expect(hub.state(12)?.vetoes).toContain('security')
+
+  const rec = () => $.tool.call({ tool: 'mcp__foundry__review_record', perspective: 'usability', reviewer: 'r', verdict: 'revise', summary: 's' })
+  await rec()
+  await rec()
+  // The review that hits the limit is refused, but it opened the wait: its row carries the card.
+  expect((await rec()).deny).toContain('used its 2 rounds')
+  const limit = await $.ui.mount({ ...toolRow('mcp__foundry__review_record', lastRow(rows)), surface: 'desktop' })
+  expect(await limit.find({ type: 'Text', text: /Waiting on you: Round limit reached/ })).toBeDefined()
+  expect(await limit.find({ key: '12-approve' })).toBeDefined()
+  expect(await limit.find({ key: '12-veto-usability' })).toBeDefined()
+  await limit.unmount()
+
+  // An ordinary review's row, which opened nothing, draws as the engine draws it.
+  const plain = await $.ui.mount({ ...toolRow('mcp__foundry__review_record', 'not-a-wait'), surface: 'desktop' })
+  expect(await plain.find({ type: 'Text', text: /Waiting on you|Foundry: decided/ })).toBeUndefined()
+  await plain.unmount()
 })

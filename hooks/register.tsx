@@ -6,7 +6,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Batch, DocFolders, Light, Meta, Verdict } from '../types'
+import type { Batch, DocFolders, Light, Meta, Verdict, WaitRow } from '../types'
 import { CONFIG_FILE, mergeSettings, readConfig } from './config'
 import { PartialWrite, currentLogin, currentRepo, ensureLabels, fetchPr, loadBatches, readRepoConfig, writeBatch, writePlanCopy } from './github'
 import { UNPLACED, absoluteTarget, bashActions, editRefusal, isReviewerAgent, planDocFolders, refusal, reviewerEditRefusal, scriptRefusal, shellWriteTargets, stateRefusal } from './guard'
@@ -63,6 +63,11 @@ const EMPTY_META: Meta = { mine: null, written: {}, delivered: {}, errors: {}, s
 const metaAtom = atom({ plugin: 'foundry', key: 'meta' } as const, EMPTY_META, { shape: 'meta-2' })
 const plansShownAtom = atom({ plugin: 'foundry', key: 'plansShown' } as const, [] as string[], { shape: 'plans-shown-1' })
 const endingAtom = atom({ plugin: 'foundry', key: 'ending' } as const, [] as string[], { shape: 'ending-1' })
+const rowsAtom = atom({ plugin: 'foundry', key: 'rows' } as const, [] as WaitRow[], { shape: 'rows-1' })
+/** How many wait rows are kept: older rows draw as the engine draws them, with no card. */
+const ROWS_KEPT = 40
+/** The tools whose rows can open a wait, and so draw its decision card under them. */
+const WAIT_TOOLS = ['mcp__foundry__signoff_request', 'mcp__foundry__conflict_raise', 'mcp__foundry__review_record', 'mcp__foundry__send_back']
 /** How much of a plan file the card shows: plenty for a plan, and bounded, so a huge file can't swamp the panel. */
 const PLAN_SHOWN_CHARS = 20_000
 
@@ -277,6 +282,27 @@ async function apply($: EngineInterface, key: string, move: (batch: Batch) => Mo
 
     return { ...result, batch: saved }
   })
+}
+
+/**
+ * Runs a move from an agent's tool call, and ties the call's row in the
+ * transcript to the wait the move opened, if it opened one: the row then draws
+ * that wait's decision card. A refused move that escalates opens one too.
+ */
+async function applyFromRow($: EngineInterface, key: string, id: string, move: (batch: Batch) => Move): Promise<Move | undefined> {
+  let before: string | undefined
+  const result = await apply($, key, batch => {
+    before = waitIdentity(batch)
+
+    return move(batch)
+  })
+  const opened = result === undefined ? undefined : waitIdentity(result.batch)
+  if (opened !== undefined && opened !== before) {
+    await update($, rowsAtom, rows => [...rows.filter(r => r.id !== id), { id, key, wait: opened }].slice(-ROWS_KEPT))
+    $.ui.log(`Foundry: tool row ${id} opened the wait ${opened}`, { to: 'debug' })
+  }
+
+  return result
 }
 
 // Every change to a batch, from reading it through its GitHub write, runs one
@@ -889,9 +915,10 @@ async function askToEnd($: EngineInterface, key: string, asking: boolean): Promi
   await update($, endingAtom, keys => (asking ? [...keys.filter(k => k !== key), key] : keys.filter(k => k !== key)))
 }
 
-async function endBatch($: EngineInterface, key: string): Promise<void> {
+/** Ends the batch once the person confirms; with `wait`, only while that wait is still the batch's. */
+async function endBatch($: EngineInterface, key: string, wait?: string): Promise<void> {
   await askToEnd($, key, false)
-  await pressDecide($, key, { action: 'end' })
+  await pressDecide($, key, { action: 'end' }, undefined, wait)
 }
 
 async function togglePlan($: EngineInterface, key: string): Promise<void> {
@@ -1154,7 +1181,7 @@ export const register: Register = (on, options) => {
     const now = await $.clock.now()
     // The plan as the reviewers read it this round is the copy on GitHub.
     const copyNote = await mirrorPlan($, batchKey(batch))
-    const result = await apply($, batchKey(batch), b => recordReview(b, { ...input, verdict }, now))
+    const result = await applyFromRow($, batchKey(batch), e.tool_use_id, b => recordReview(b, { ...input, verdict }, now))
     if (result?.error) return { deny: result.error }
     if (copyNote !== undefined) return { result: `${describe(result?.batch ?? batch)}\n\n${copyNote}` }
 
@@ -1170,7 +1197,7 @@ export const register: Register = (on, options) => {
     if (!isActive(batch)) return { deny: 'This session runs no Foundry batch.' }
     if (!summary) return { deny: 'conflict_raise needs a summary.' }
     const now = await $.clock.now()
-    const result = await apply($, batchKey(batch), b => raiseConflict(b, perspectives, summary, now))
+    const result = await applyFromRow($, batchKey(batch), e.tool_use_id, b => raiseConflict(b, perspectives, summary, now))
     if (result?.error) return { deny: result.error }
     void openPane($)
 
@@ -1201,7 +1228,7 @@ export const register: Register = (on, options) => {
     // The person reads the plan they sign off on GitHub, wherever they are.
     const copyNote = await mirrorPlan($, batchKey(batch))
     const now = await $.clock.now()
-    const result = await apply($, batchKey(batch), b => requestSignoff(b, summary, now))
+    const result = await applyFromRow($, batchKey(batch), e.tool_use_id, b => requestSignoff(b, summary, now))
     if (result?.error) return { deny: result.error }
     void openPane($)
     const asked = result?.batch ?? batch
@@ -1242,7 +1269,7 @@ export const register: Register = (on, options) => {
     const batch = await mine($)
     if (!isActive(batch)) return { deny: 'This session runs no Foundry batch.' }
     const now = await $.clock.now()
-    const result = await apply($, batchKey(batch), b => sendBack(b, reason, summary, now))
+    const result = await applyFromRow($, batchKey(batch), e.tool_use_id, b => sendBack(b, reason, summary, now))
     if (result?.error) return { deny: result.error }
 
     return {
@@ -1372,7 +1399,7 @@ export const register: Register = (on, options) => {
       return {
         text: (await openPane($))
           ? 'Foundry pane opened.'
-          : 'The Foundry panel shows on the desktop app and in the terminal, not here. Use `/foundry status` and `/foundry plan`, and answer the questions Foundry asks.',
+          : "The Foundry panel shows on the desktop app and in the terminal, not here. Use `/foundry status` and `/foundry plan`, and decide on the card under the agent's request in the conversation, or in the questions Foundry asks.",
       }
     }
     if (verb === 'sync') {
@@ -1616,6 +1643,84 @@ export const register: Register = (on, options) => {
             </Box>
           )
         })}
+      </Box>
+    )
+  })
+
+  // -------------------------------------------------------------------------
+  // The decision card under the agent's own tool row: the sign-off request,
+  // the conflict, the round limit. It is drawn in the transcript, so it shows
+  // wherever the conversation does, the mobile app included, where no panel
+  // shows. It offers what the panel's card offers, and answers that wait alone.
+
+  on('ui.render', { component: 'ToolUse', props: { tool: WAIT_TOOLS } }, async ($, e, next) => {
+    const drawn = await next(e)
+    const row = (await read($, rowsAtom)).find(r => r.id === e.props.tool_use_id)
+    if (row === undefined) return drawn
+    const batch = await byKey($, row.key)
+    if (batch === undefined) return drawn
+    const { Box, Text, Button } = $.ui.resolve(e)
+
+    if (waitIdentity(batch) !== row.wait) {
+      // Plain text, so the mobile app draws it as one quiet line under the row.
+      return (
+        <Box flexDirection="column">
+          {drawn}
+          <Text dimColor>Foundry: decided.</Text>
+        </Box>
+      )
+    }
+
+    const id = `${batch.lead}`
+    const options = decisionOptions(batch)
+    if (options.length === 0) return drawn
+    const ending = (await read($, endingAtom)).includes(row.key)
+    const now = await $.clock.now()
+    // In the mobile app, a border on the Box that holds the row asks for a card under it.
+    // Elsewhere the row stays as it was and the card is drawn beneath it.
+    const isMobile = e.surface === 'mobile'
+    const card = (
+      <Box flexDirection="column" paddingX={1} {...(isMobile ? {} : { borderStyle: 'round' as const, borderColor: 'warning', marginTop: 1 })}>
+        <Text weight="semibold" color="warning">
+          ⚠ Waiting on you: {waitLabel(batch)} · {waitedFor(batch.waiting?.at ?? now, now)}
+        </Text>
+        <Text dimColor>
+          {batch.title} (#{batch.lead})
+        </Text>
+        <Box flexDirection="row" flexWrap="wrap" gap={1}>
+          {options.map(o => (
+            <Button
+              key={`${id}-${decisionKey(o.decision)}`}
+              label={`${o.label}: ${batch.title}`}
+              variant={o.decision.action === 'approve' ? 'primary' : undefined}
+              onPress={press($, () => (o.decision.action === 'end' ? askToEnd($, row.key, true) : pressDecide($, row.key, o.decision, undefined, row.wait)))}
+            >
+              {o.decision.action === 'end' ? `${o.label}…` : o.label}
+            </Button>
+          ))}
+        </Box>
+        {ending && (
+          <Box flexDirection="column">
+            <Text color="warning">End "{batch.title}"? Its gates stop guarding, and it can't be undone.</Text>
+            <Box flexDirection="row" flexWrap="wrap" columnGap={2}>
+              <Button key={`${id}-end-confirm`} label="End batch" onPress={press($, () => endBatch($, row.key, row.wait))} />
+              <Button key={`${id}-end-keep`} label="Keep batch" variant="primary" onPress={press($, () => askToEnd($, row.key, false))} />
+            </Box>
+          </Box>
+        )}
+        <Text dimColor>Or type {options.map(o => o.typed).join(' · ')}</Text>
+      </Box>
+    )
+
+    return isMobile ? (
+      <Box flexDirection="column" borderStyle="round" borderColor="warning">
+        {drawn}
+        {card}
+      </Box>
+    ) : (
+      <Box flexDirection="column">
+        {drawn}
+        {card}
       </Box>
     )
   })
