@@ -7,13 +7,15 @@ import type { Batch } from '../types'
 import { PLAN_DOCS, WAIT_LABEL, planPath } from './model'
 
 /** An outward step a stage holds back. */
-export type Action = 'commit' | 'claim' | 'push' | 'open-pr' | 'merge'
+export type Action = 'commit' | 'claim' | 'push' | 'open-draft' | 'open-pr' | 'mark-ready' | 'merge'
 
 const ACTION_WORDS: Record<Action, string> = {
   commit: 'commit',
   claim: 'claim issues',
   push: 'push',
-  'open-pr': 'open a pull request',
+  'open-draft': 'open a draft pull request',
+  'open-pr': 'open a pull request for review',
+  'mark-ready': 'mark the pull request ready for review',
   merge: 'merge',
 }
 
@@ -82,7 +84,9 @@ function segmentActions(tokens: string[]): Action[] {
     const noun = tokens[i]
     const verb = tokens[i + 1]
     const rest = tokens.slice(i + 2)
-    if (noun === 'pr' && verb === 'create') return ['open-pr']
+    // A draft can open in the build loop, for the build sign-off to read; review waits for the sign-off.
+    if (noun === 'pr' && verb === 'create') return [rest.includes('--draft') || rest.includes('-d') ? 'open-draft' : 'open-pr']
+    if (noun === 'pr' && verb === 'ready') return [rest.includes('--undo') ? 'open-draft' : 'mark-ready']
     if (noun === 'pr' && verb === 'merge') return ['merge']
     if (noun === 'issue' && verb === 'edit' && rest.some(t => t.startsWith('--add-assignee'))) return ['claim']
     if (noun === 'api' && tokens.some(t => /\/pulls\/\d+\/merge\b/.test(t))) return ['merge']
@@ -108,14 +112,14 @@ export function bashActions(command: string): Action[] {
 /** Which actions each stage allows, while nothing waits on the person. */
 const ALLOWED: Record<Batch['stage'], ReadonlySet<Action>> = {
   plan: new Set(),
-  build: new Set(['commit', 'claim']),
-  ship: new Set(['claim', 'push', 'open-pr']),
-  done: new Set(['commit', 'claim', 'push', 'open-pr']),
+  build: new Set(['commit', 'claim', 'push', 'open-draft']),
+  ship: new Set(['claim', 'push', 'open-draft', 'open-pr', 'mark-ready']),
+  done: new Set(['commit', 'claim', 'push', 'open-draft', 'open-pr', 'mark-ready']),
 }
 
 const NEXT_STEP: Record<Batch['stage'], string> = {
   plan: 'Finish the plan loop (every reviewer approves), then call mcp__foundry__signoff_request and end your turn.',
-  build: 'Pushing and the pull request come after the build sign-off: finish the build loop and call mcp__foundry__signoff_request.',
+  build: 'In the build loop the pull request opens as a draft (`gh pr create --draft`); it is marked ready for review (`gh pr ready`) after the build sign-off. Finish the build loop and call mcp__foundry__signoff_request.',
   ship: 'To change the code, call mcp__foundry__send_back first: fixes happen in the build loop.',
   done: '',
 }
