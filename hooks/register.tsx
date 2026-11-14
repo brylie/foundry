@@ -65,7 +65,8 @@ const VERDICT_COLOR: Record<Verdict, string> = { ready: 'success', revise: 'warn
 const LIGHT_MARK: Record<Light, string> = { pass: '✓', fail: '✗', pending: '…', none: '—' }
 const LIGHT_COLOR: Record<Light, string> = { pass: 'success', fail: 'error', pending: 'warning', none: 'subtle' }
 
-type Options = { reviewers?: string; maxRounds?: number; onlineReviewers?: string; maintainers?: string; botTimeoutMinutes?: number }
+// The engine hands settings over as the person typed them, so a number may arrive as a string.
+type Options = { reviewers?: string; maxRounds?: number | string; onlineReviewers?: string; maintainers?: string; botTimeoutMinutes?: number | string }
 
 function settingsFrom(options: Options): Settings {
   // An empty list would let a gate pass with no reviews at all, so it means the defaults.
@@ -613,6 +614,19 @@ function describe(batch: Batch): string {
  * session runs the batch. The wake is not awaited: a submitted prompt waits
  * for the session to be idle, and the press must not wait with it.
  */
+/**
+ * A panel press. The engine types `onPress` as returning nothing, so a failure
+ * in an async press would go unseen; it is caught here and shown as a toast.
+ * The promise is still handed back, so whoever presses can wait for it.
+ */
+function press($: EngineInterface, task: () => Promise<void>): () => void {
+  // eslint-disable-next-line @typescript-eslint/no-misused-promises -- caught here; returned only so a caller can await it
+  return () =>
+    task().catch((error: unknown) => {
+      $.ui.toast(`Foundry: that didn't go through. ${error instanceof Error ? error.message : String(error)}`)
+    })
+}
+
 async function pressDecide($: EngineInterface, key: string, decision: Decision): Promise<void> {
   const now = await $.clock.now()
   const result = await apply($, key, batch => decide(batch, decision, now))
@@ -645,7 +659,7 @@ async function openPane($: EngineInterface): Promise<void> {
 // The module.
 
 export const register: Register = (on, options) => {
-  const settings = settingsFrom(options as Options)
+  const settings = settingsFrom(options)
   const reviewers = settings.reviewers.join(', ')
 
   on('session.start', async ($, e, next) => {
@@ -1001,7 +1015,7 @@ export const register: Register = (on, options) => {
   on('tool.call', { tool: 'Skill' }, async ($, e, next) => {
     const skill = str((e as unknown as Record<string, unknown>)['skill'])
 
-    return /(^|:)foundry$/.test(skill) ? { deny: 'Foundry: /foundry is for the person. Use the mcp__foundry__ tools instead.' } : next(e)
+    return /(?:^|:)foundry$/.test(skill) ? { deny: 'Foundry: /foundry is for the person. Use the mcp__foundry__ tools instead.' } : next(e)
   })
 
   // -------------------------------------------------------------------------
@@ -1077,7 +1091,7 @@ export const register: Register = (on, options) => {
     if (batches.length === 0) {
       return (
         <Box flexDirection="column">
-          <Text bold>No Foundry batches</Text>
+          <Text weight="semibold">No Foundry batches</Text>
           <Text dimColor>Start one with /foundry:begin. Open batches in this repository appear here, whichever session runs them.</Text>
         </Box>
       )
@@ -1106,13 +1120,13 @@ export const register: Register = (on, options) => {
               paddingX={1}
               marginBottom={1}
             >
-              <Text bold>{batch.title}</Text>
+              <Text weight="semibold">{batch.title}</Text>
               <Text dimColor>
                 {batch.issues.map(n => `#${n}`).join(' ')} · {meta.mine === key ? 'this session' : 'another session'}
               </Text>
               <Box flexDirection="row" flexWrap="wrap" columnGap={1}>
                 {TRACK.map((step, i) => (
-                  <Text color={i === at ? 'claude' : i < at ? 'success' : 'subtle'} bold={i === at}>
+                  <Text color={i === at ? 'claude' : i < at ? 'success' : 'subtle'} weight={i === at ? 'semibold' : undefined}>
                     {i < at ? '✓' : i === at ? '▶' : '·'} {step}
                   </Text>
                 ))}
@@ -1165,7 +1179,7 @@ export const register: Register = (on, options) => {
 
               {waiting !== undefined && (
                 <Box flexDirection="column" borderStyle="bold" borderColor="warning" paddingX={1} marginTop={1}>
-                  <Text bold color="warning">
+                  <Text weight="semibold" color="warning">
                     ⚠ Waiting on you: {WAIT_LABEL[waiting.kind]}
                   </Text>
                   <Markdown text={waiting.summary} />
@@ -1174,31 +1188,31 @@ export const register: Register = (on, options) => {
                       switch (action) {
                         case 'approve':
                           return [
-                            <Button key={`${id}-approve`} label="Approve" variant="primary" onPress={() => pressDecide($, key, { action: 'approve' })} />,
+                            <Button key={`${id}-approve`} label="Approve" variant="primary" onPress={press($, () => pressDecide($, key, { action: 'approve' }))} />,
                           ]
                         case 'changes': {
                           const label = waiting.kind === 'signoff' ? 'Request changes' : batch.stage === 'ship' ? 'Send back anyway' : 'Another round'
 
-                          return [<Button key={`${id}-changes`} label={label} onPress={() => pressDecide($, key, { action: 'changes' })} />]
+                          return [<Button key={`${id}-changes`} label={label} onPress={press($, () => pressDecide($, key, { action: 'changes' }))} />]
                         }
                         case 'veto':
                           return (waiting.perspectives ?? []).map(p => (
-                            <Button key={`${id}-veto-${p}`} label={`Veto ${p}`} onPress={() => pressDecide($, key, { action: 'veto', perspective: p })} />
+                            <Button key={`${id}-veto-${p}`} label={`Veto ${p}`} onPress={press($, () => pressDecide($, key, { action: 'veto', perspective: p }))} />
                           ))
                         case 'compromise':
                           return [
-                            <Button key={`${id}-compromise`} label="I'll write a compromise" onPress={() => pressDecide($, key, { action: 'compromise' })} />,
+                            <Button key={`${id}-compromise`} label="I'll write a compromise" onPress={press($, () => pressDecide($, key, { action: 'compromise' }))} />,
                           ]
                         case 'keep-waiting':
-                          return [<Button key={`${id}-wait`} label="Keep waiting" onPress={() => pressDecide($, key, { action: 'keep-waiting' })} />]
+                          return [<Button key={`${id}-wait`} label="Keep waiting" onPress={press($, () => pressDecide($, key, { action: 'keep-waiting' }))} />]
                         case 'dismiss':
                           return (waiting.bots ?? []).map(bot => (
-                            <Button key={`${id}-dismiss-${bot}`} label={`Dismiss ${bot}`} onPress={() => pressDecide($, key, { action: 'dismiss', login: bot })} />
+                            <Button key={`${id}-dismiss-${bot}`} label={`Dismiss ${bot}`} onPress={press($, () => pressDecide($, key, { action: 'dismiss', login: bot }))} />
                           ))
                         case 'acknowledge':
-                          return [<Button key={`${id}-ack`} label="OK" onPress={() => pressDecide($, key, { action: 'acknowledge' })} />]
+                          return [<Button key={`${id}-ack`} label="OK" onPress={press($, () => pressDecide($, key, { action: 'acknowledge' }))} />]
                         case 'end':
-                          return [<Button key={`${id}-end-now`} label="End batch" onPress={() => pressDecide($, key, { action: 'end' })} />]
+                          return [<Button key={`${id}-end-now`} label="End batch" onPress={press($, () => pressDecide($, key, { action: 'end' }))} />]
                         default:
                           return []
                       }
@@ -1210,9 +1224,9 @@ export const register: Register = (on, options) => {
               {error !== undefined && <Text color="error">GitHub: {error}</Text>}
               <Box flexDirection="row" marginTop={1}>
                 {batch.stage === 'done' ? (
-                  <Button key={`${id}-clear`} label="Clear" plain onPress={() => clearCard($, key)} />
+                  <Button key={`${id}-clear`} label="Clear" plain onPress={press($, () => clearCard($, key))} />
                 ) : (
-                  <Button key={`${id}-end`} label="End batch" plain onPress={() => pressDecide($, key, { action: 'end' })} />
+                  <Button key={`${id}-end`} label="End batch" plain onPress={press($, () => pressDecide($, key, { action: 'end' }))} />
                 )}
               </Box>
             </Box>

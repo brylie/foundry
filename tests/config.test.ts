@@ -50,6 +50,18 @@ bot_timeout_minutes: 45
     expect(merged.docs).toEqual({ requirements: ['docs/prd'], specifications: ['docs/specs'], decisions: ['docs/adr'], user: [] })
   })
 
+  test('spacing around colons and dashes is free, and trailing space is dropped', async () => {
+    const { values, problems } = parseYaml('max_rounds :2  \nreviewers:\n-   security\t\n    -\tarchitecture\n')
+    expect(problems).toEqual([])
+    expect(values).toEqual({ max_rounds: 2, reviewers: ['security', 'architecture'] })
+  })
+
+  test("the README's example reads as written", async () => {
+    const { config, problems } = readConfig('online_reviewers: [coderabbitai[bot]]\nmaintainers: [your-github-login]\nmax_rounds: 3\n')
+    expect(problems).toEqual([])
+    expect(config).toEqual({ onlineReviewers: ['coderabbitai'], maintainers: ['your-github-login'], maxRounds: 3 })
+  })
+
   test('the repository root is no doc folder, however it is spelled', async () => {
     const { config, problems } = readConfig('requirements: [., ./, ././]\ndecisions: [./docs/./adr]\n')
     expect(problems).toEqual(['"requirements": ., ./, ././ is not a folder or file inside the repository (the root itself is not allowed)'])

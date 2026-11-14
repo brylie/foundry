@@ -36,7 +36,7 @@ function program(tokens: string[]): number {
   let i = 0
   while (i < tokens.length) {
     const token = tokens[i] ?? ''
-    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(token) || WRAPPERS.has(token)) {
+    if (/^[A-Z_]\w*=/i.test(token) || WRAPPERS.has(token)) {
       i += 1
       continue
     }
@@ -62,7 +62,7 @@ function baseName(path: string): string {
 }
 
 function segments(command: string): string[][] {
-  return command.split(/&&|\|\||[;|\n&]|\$\(|`|[()]/).map(words)
+  return command.split(/&&|\|\||[;|\n&`()]|\$\(/).map(words)
 }
 
 function segmentActions(tokens: string[]): Action[] {
@@ -245,8 +245,8 @@ function isWriting(command: string): boolean {
       if (noun === 'label') return true
       if ((noun === 'issue' || noun === 'pr') && ['edit', 'comment', 'close', 'reopen', 'delete'].includes(verb)) return true
       if (noun === 'api') {
-        const isWrite = rest.some((t, j) => /^(-X|--method)$/.test(t) && !/^GET$/i.test(rest[j + 1] ?? '')) ||
-          rest.some(t => /^(-f|-F|--field|--raw-field|--input)$/.test(t) || /^(--method=|-X)(?!GET\b)\w+/i.test(t))
+        const isWrite = rest.some((t, j) => /^(?:-X|--method)$/.test(t) && !/^GET$/i.test(rest[j + 1] ?? '')) ||
+          rest.some(t => /^(?:-f|-F|--field|--raw-field|--input)$/.test(t) || /^(?:--method=|-X)(?!GET\b)\w+/i.test(t))
         if (isWrite || tokens.some(t => /graphql/.test(t))) return true
       }
     }
@@ -254,8 +254,8 @@ function isWriting(command: string): boolean {
       if (
         rest.some(
           t =>
-            /^(-X|--request|-d|--data.*|-F|--form|--json|-T|--upload-file|--post-data|--method)$/.test(t) ||
-            /^--(data|json|form|request)=/.test(t) ||
+            /^(?:-X|--request|-d|--data.*|-F|--form|--json|-T|--upload-file|--post-data|--method)$/.test(t) ||
+            /^--(?:data|json|form|request)=/.test(t) ||
             // The method attached to its flag (`-XDELETE`), and a body attached to `-d` (`-d@file`).
             /^-X(?!GET\b)\w+/i.test(t) ||
             /^-d./.test(t),
@@ -264,8 +264,8 @@ function isWriting(command: string): boolean {
         return true
       }
     }
-    if (/^(python[0-9.]*|node|deno|bun|ruby|perl|php|bash|sh|zsh|osascript)$/.test(name)) {
-      if (rest.some(t => /^(-c|-e|--eval|-)$/.test(t)) || rest.length === 0) return true
+    if (/^(?:python[0-9.]*|node|deno|bun|ruby|perl|php|bash|sh|zsh|osascript)$/.test(name)) {
+      if (rest.some(t => /^(?:-c|-e|--eval|-)$/.test(t)) || rest.length === 0) return true
     }
   }
 
@@ -276,8 +276,10 @@ function isWriting(command: string): boolean {
 const BULK_LABELS = /issues\/(\d+)\/labels(?![/\w%])/gi
 // The method as a shell flag (`-X DELETE`, `-XPUT`, `--method=PUT`), as list items in a script
 // (`"-X", "DELETE"`), or as a client call or option (`requests.put`, `method: 'DELETE'`).
+// The space after the flag is one `\s*`, the separator's own space inside the optional
+// group: two `\s*` side by side would backtrack quadratically on a long run of spaces.
 const REPLACING =
-  /(?:^|[^\w-])(?:-X|--method|--request)['"]?\s*[,=]?\s*['"]?(?:PUT|DELETE)\b|\b(?:requests|axios|http)\.(?:put|delete)\b|method\s*[:=]\s*['"](?:PUT|DELETE)['"]/i
+  /(?:^|[^\w-])(?:-X|--method|--request)['"]?\s*(?:[,=]\s*)?['"]?(?:PUT|DELETE)\b|\b(?:requests|axios|http)\.(?:put|delete)\b|method\s*[:=]\s*['"](?:PUT|DELETE)['"]/i
 
 function protectedThing(text: string, commentIds: number[], tracked: number[]): string | undefined {
   for (const { pattern, what } of PROTECTED) if (pattern.test(text)) return what
@@ -305,7 +307,7 @@ export function stateRefusal(command: string, commentIds: number[], tracked: num
   return `Foundry: only the Foundry mod changes ${what}. Use the mcp__foundry__ tools; the person decides gates in the Foundry pane.`
 }
 
-const SCRIPT = /\.(sh|bash|zsh|py|js|mjs|cjs|ts|mts|rb|pl|php|ps1)$/i
+const SCRIPT = /\.(?:sh|bash|zsh|py|js|mjs|cjs|ts|mts|rb|pl|php|ps1)$/i
 
 /** Why writing a script is refused: a script could touch the protected state where the Bash guard cannot see. */
 export function scriptRefusal(
@@ -327,10 +329,14 @@ export function scriptRefusal(
 // hold them from Bash too.
 
 const QUOTED = /'([^']*)'|"((?:[^"\\]|\\.)*)"/g
-// `> file`, `>> file`, `1> file`, `&> file`, the file quoted or not; never `2>&1`.
+// `> file`, `>> file`, `>| file`, `1> file`, `10> file`, `&> file`, `<> file`, and
+// `echo v42>file`, where no space comes before the `>`: the file quoted or not.
+// Whatever stands before a `>`, bash opens the file after it, so any `>` counts
+// except the second of `>>`. Never `2>&1`: a target never starts with `&`.
 // Quoted text is set aside as numbered placeholders first, so a `>` inside a
 // string is no redirection while a quoted target still is one.
-const REDIRECT = /(?:^|[^<>&\d])(?:\d|&)?>>?(?!&)\s*(\u0000\d+\u0000|[^\s;&|<>()\u0000]+)/g
+// A NUL marks a placeholder because no shell command can hold one.
+const REDIRECT = /(?<!>)>>?\|?\s*(\0\d+\0|[^\s;&|<>()\0]+)/g
 const WRITES_ARGS = new Set(['tee', 'touch', 'rm', 'rmdir', 'truncate', 'mkdir', 'unlink'])
 const WRITES_LAST = new Set(['cp', 'mv', 'install', 'ln', 'rsync'])
 
@@ -350,7 +356,7 @@ export function shellWriteTargets(command: string): string[] {
   })
   for (const match of bare.matchAll(REDIRECT)) {
     const target = match[1] ?? ''
-    const placeholder = /^\u0000(\d+)\u0000$/.exec(target)
+    const placeholder = /^\0(\d+)\0$/.exec(target)
     targets.push(placeholder ? (quoted[Number(placeholder[1])] ?? '') : target)
   }
 

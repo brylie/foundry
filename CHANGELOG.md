@@ -2,6 +2,15 @@
 
 Foundry's notable changes, newest first. Versions follow [Semantic Versioning](https://semver.org/): before 1.0, a minor version can change behaviour.
 
+## Unreleased
+
+- **Documentation reorganized.** The README is now a short introduction and quick start. The details moved to guides in `docs/`: [How it works](docs/how-it-works.md), [Configuration](docs/configuration.md), [Reference](docs/reference.md) and [Security model](docs/security.md). A new [CONTRIBUTING.md](CONTRIBUTING.md) covers development.
+- **The guard reads long commands in linear time.** A command with a long run of spaces after `-X` could take the label check a minute: two adjacent `\s*` in one pattern backtracked quadratically. The `foundry.yaml` reader had the same pattern, on a file the repository trusts.
+- **The guard sees more redirections.** A `>` straight after a word (`echo v42>file`), a descriptor of two digits (`10>file`), `>|` and `<>` each write a file, and the stages that hold edits now hold them too.
+- **A failed panel press is shown.** Buttons on a card ran their work without anyone waiting for it, so a failure (GitHub unreachable, say) vanished. It now shows as a toast.
+- **Linters.** `npm run check` type-checks, then lints the mod with ESLint (typescript-eslint, regexp and sonarjs rules) and the scripts with ruff. See [CONTRIBUTING.md](CONTRIBUTING.md#checks).
+- **Type-checking** no longer includes the connected MCP tools' declarations, which could grow too large for TypeScript in a session with many servers.
+
 ## 0.2.0
 
 Documentation is now a first-class part of the loop.

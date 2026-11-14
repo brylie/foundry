@@ -171,7 +171,7 @@ export async function loadBatches($: EngineInterface, repo: string, pinned: Reco
   const issues = await ghJson<{ number: number }[]>($, ['issue', 'list', '-R', repo, '--label', 'foundry', '--state', 'open', '--limit', '100', '--json', 'number'])
   const seen = new Set<number>()
   const found: Batch[] = []
-  for (const { number } of issues.sort((a, b) => a.number - b.number)) {
+  for (const { number } of [...issues].sort((a, b) => a.number - b.number)) {
     if (seen.has(number)) continue
     const read = await readStateComment($, repo, number, writer, pinned[number])
     if (read === undefined) continue

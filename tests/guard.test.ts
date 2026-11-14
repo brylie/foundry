@@ -62,6 +62,14 @@ describe('shell writes', () => {
     expect(shellWriteTargets('printf x > "/repo/src/a.ts"')).toEqual(['/repo/src/a.ts'])
     expect(shellWriteTargets("echo 'x > y' >> 'notes with space.md'")).toEqual(['notes with space.md'])
     expect(shellWriteTargets('sed -n 1,5p src/x.ts')).toEqual([])
+    // No space before the `>`, a descriptor of two digits, noclobber's `>|`, a read-write `<>`:
+    // bash writes the file every time.
+    expect(shellWriteTargets('echo v42>src/a.ts')).toEqual(['src/a.ts'])
+    expect(shellWriteTargets('echo hi 10>src/a.ts')).toEqual(['src/a.ts'])
+    expect(shellWriteTargets('echo x >| src/a.ts')).toEqual(['src/a.ts'])
+    expect(shellWriteTargets('exec 3<>src/a.ts')).toEqual(['src/a.ts'])
+    expect(shellWriteTargets('echo a>src/b.ts>src/c.ts')).toEqual(['src/b.ts', 'src/c.ts'])
+    expect(shellWriteTargets('make 2>&1 >&2 | cat')).toEqual([])
   })
 
   test('relative targets are read from the session folder; home is outside any repository', async () => {
@@ -177,6 +185,15 @@ describe("the state only the mod writes", () => {
     expect(scriptRefusal('/repo/tools/clear.py', script, [], '/plugins/foundry', [3])).toContain("Foundry's labels")
     expect(scriptRefusal('/repo/tools/clear.py', script.replace('"DELETE"', '"GET"'), [], '/plugins/foundry', [3])).toBeUndefined()
     expect(scriptRefusal('/repo/tools/clear.py', script, [], '/plugins/foundry', [4])).toBeUndefined()
+  })
+
+  test('a long run of spaces after the method flag is read in linear time', async () => {
+    // Two `\s*` side by side once made this quadratic: a minute for 200,000 spaces.
+    const padded = (method: string) => `gh api -X${' '.repeat(200_000)}${method} repos/o/r/issues/3/labels\n`
+    const started = Date.now()
+    expect(scriptRefusal('/repo/tools/clear.py', padded('GET'), [], '/plugins/foundry', [3])).toBeUndefined()
+    expect(scriptRefusal('/repo/tools/clear.py', padded('DELETE'), [], '/plugins/foundry', [3])).toContain("Foundry's labels")
+    expect(Date.now() - started).toBeLessThan(1000)
   })
 
   test('a script that would write them is refused, outside the plugin itself', async () => {
