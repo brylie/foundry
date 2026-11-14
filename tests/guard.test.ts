@@ -62,6 +62,14 @@ describe('shell writes', () => {
     expect(shellWriteTargets('printf x > "/repo/src/a.ts"')).toEqual(['/repo/src/a.ts'])
     expect(shellWriteTargets("echo 'x > y' >> 'notes with space.md'")).toEqual(['notes with space.md'])
     expect(shellWriteTargets('sed -n 1,5p src/x.ts')).toEqual([])
+    // No space before the `>`, a descriptor of two digits, noclobber's `>|`, a read-write `<>`:
+    // bash writes the file every time.
+    expect(shellWriteTargets('echo v42>src/a.ts')).toEqual(['src/a.ts'])
+    expect(shellWriteTargets('echo hi 10>src/a.ts')).toEqual(['src/a.ts'])
+    expect(shellWriteTargets('echo x >| src/a.ts')).toEqual(['src/a.ts'])
+    expect(shellWriteTargets('exec 3<>src/a.ts')).toEqual(['src/a.ts'])
+    expect(shellWriteTargets('echo a>src/b.ts>src/c.ts')).toEqual(['src/b.ts', 'src/c.ts'])
+    expect(shellWriteTargets('make 2>&1 >&2 | cat')).toEqual([])
   })
 
   test('relative targets are read from the session folder; home is outside any repository', async () => {

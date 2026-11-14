@@ -329,12 +329,14 @@ export function scriptRefusal(
 // hold them from Bash too.
 
 const QUOTED = /'([^']*)'|"((?:[^"\\]|\\.)*)"/g
-// `> file`, `>> file`, `1> file`, `&> file`, the file quoted or not; never `2>&1`.
+// `> file`, `>> file`, `>| file`, `1> file`, `10> file`, `&> file`, `<> file`, and
+// `echo v42>file`, where no space comes before the `>`: the file quoted or not.
+// Whatever stands before a `>`, bash opens the file after it, so any `>` counts
+// except the second of `>>`. Never `2>&1`: a target never starts with `&`.
 // Quoted text is set aside as numbered placeholders first, so a `>` inside a
 // string is no redirection while a quoted target still is one.
-// A NUL marks a placeholder because no shell command can hold one. The target never
-// starts with `&`, which is what keeps `2>&1` out.
-const REDIRECT = /(?:^|[^<>&\d])(?:\d|&)?>>?\s*(\0\d+\0|[^\s;&|<>()\0]+)/g
+// A NUL marks a placeholder because no shell command can hold one.
+const REDIRECT = /(?<!>)>>?\|?\s*(\0\d+\0|[^\s;&|<>()\0]+)/g
 const WRITES_ARGS = new Set(['tee', 'touch', 'rm', 'rmdir', 'truncate', 'mkdir', 'unlink'])
 const WRITES_LAST = new Set(['cp', 'mv', 'install', 'ln', 'rsync'])
 
