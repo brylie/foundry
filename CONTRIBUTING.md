@@ -9,7 +9,8 @@ You need:
 - **Claude Code 2.1.321 or later.** Foundry's mod uses function hooks, which earlier builds don't load. An older `claude` on your `PATH` warns that `types` is an unknown manifest field and validates against an older API, so check `claude --version`.
 - **The GitHub CLI** (`gh`), signed in, to run Foundry against a real repository.
 - **Python 3**, for the intake and retro scripts.
-- **Node.js**, to type-check with `tsc`.
+- **Node.js**, for the type-check and the linter. Run `npm install` once; `package.json` holds development tools only, and the plugin itself has no dependencies.
+- **[uv](https://docs.astral.sh/uv/)**, which runs ruff, the Python linter, without installing it.
 
 Load your working copy into a session with:
 
@@ -36,20 +37,38 @@ hooks/            the mod
 types/            the mod's state contract
 tests/            *.test.ts(x), run by claude plugin test
 docs/             the specification and the guides
+package.json      development tools only: TypeScript, ESLint and its plugins
+eslint.config.js  the TypeScript lint rules; ruff.toml holds the Python ones
 ```
 
 Keep `model.ts`, `guard.ts`, `ship.ts`, `state.ts` and `config.ts` free of `$` (the engine interface), so they stay pure and testable. Anything that touches the engine or GitHub belongs in `register.tsx` or `github.ts`.
 
 ## Checks
 
-Every change passes all four:
+Every change passes all three:
 
 ```bash
 claude plugin validate .        # the manifest and the mod, as the engine reads them
 claude plugin test .            # the test suite
-npx -p typescript tsc -p .      # types, against the engine's declarations
-python3 -m py_compile skills/begin/scripts/*.py skills/retro/scripts/*.py
+npm run check                   # types, then the TypeScript and Python linters
 ```
+
+`npm run check` runs three steps, which you can also run one at a time:
+
+- `npm run typecheck`: `tsc` against the engine's declarations.
+- `npm run lint`: ESLint over the mod and the tests. `npm run lint:fix` applies the safe fixes.
+- `npm run lint:py`: ruff over the skills' scripts.
+
+The linters look for bugs and security problems, not formatting:
+
+- **typescript-eslint**, type-aware: promises left floating or handed to something that won't await them, unsafe `any`, conditions that are always true.
+- **eslint-plugin-regexp**: regexes that backtrack catastrophically, or that hold unreachable or useless parts. The guard runs regexes on whatever an agent writes, so a slow regex there stalls every tool call.
+- **eslint-plugin-sonarjs**: identical branches, dead stores, and functions too complex to review. Complexity is a warning, not an error.
+- **ruff**: pyflakes, bugbear and bandit for the scripts.
+
+`eslint.config.js` and `ruff.toml` say why each rule they turn off is off. A rule turned off for one line says why on that line.
+
+After `npm install`, `claude plugin validate .` says "No digest": `node_modules/` holds more files than it counts. Validation itself still runs, and an installed copy comes from git, which leaves `node_modules/` out.
 
 `tsconfig.json` includes the engine's core and built-in tool declarations, but not `.claude-plugin/types/claude-code-mcp/`. That folder declares every MCP tool your session has connected. With many servers, the union grows too large for TypeScript, and the result would differ between contributors.
 

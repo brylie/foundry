@@ -35,7 +35,7 @@ DECISION_RECORD = re.compile(r"^(adr|rfc|decision)$", re.IGNORECASE)
 
 
 def gh(*args):
-    result = subprocess.run(["gh", *args], text=True, capture_output=True)
+    result = subprocess.run(["gh", *args], check=False, text=True, capture_output=True)
     if result.returncode != 0:
         sys.exit(f"gh {' '.join(args[:3])}: {result.stderr.strip()}")
     return json.loads(result.stdout)
@@ -120,7 +120,7 @@ def open_issue_numbers(repo):
     """Every open issue number, all pages (the REST list includes pull requests, which do no harm here)."""
     result = subprocess.run(
         ["gh", "api", "--paginate", f"repos/{repo}/issues?state=open&per_page=100", "--jq", ".[].number"],
-        text=True, capture_output=True,
+        check=False, text=True, capture_output=True,
     )
     if result.returncode != 0:
         sys.exit(f"gh api repos/{repo}/issues: {result.stderr.strip()}")
@@ -146,7 +146,7 @@ def line(issue, fields=None, note=""):
 
 
 def git(path, *args):
-    result = subprocess.run(["git", "-C", path, *args], text=True, capture_output=True)
+    result = subprocess.run(["git", "-C", path, *args], check=False, text=True, capture_output=True)
     return result.stdout.strip() if result.returncode == 0 else ""
 
 

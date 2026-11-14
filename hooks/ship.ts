@@ -43,7 +43,7 @@ const FAIL = new Set(['FAILURE', 'TIMED_OUT', 'CANCELLED', 'ACTION_REQUIRED', 'S
  * stopped by a rate limit (coderabbit's "Review limit reached", gitar's
  * "Gitar is working").
  */
-const BUSY = /review limit reached|rate[- ]limit|is working|in progress|reviewing (your|this)|currently processing|will review shortly/i
+const BUSY = /review limit reached|rate[- ]limit|is working|in progress|reviewing (?:your|this)|currently processing|will review shortly/i
 
 function checkLight(node: Rollup['contexts']['nodes'][number]): Check {
   if (node.__typename === 'CheckRun') {

@@ -20,8 +20,6 @@ Priority or Size sorts to the bottom of the board and cannot be batched by
 size, so the script refuses the plan instead of filing it half done.
 """
 
-DEFAULT_REQUIRED_FIELDS = ["Priority", "Size"]
-
 import argparse
 import json
 import subprocess
@@ -29,9 +27,11 @@ import sys
 import tempfile
 import time
 
+DEFAULT_REQUIRED_FIELDS = ["Priority", "Size"]
+
 
 def gh(*args, check=True):
-    result = subprocess.run(["gh", *args], capture_output=True, text=True)
+    result = subprocess.run(["gh", *args], check=False, capture_output=True, text=True)
     if check and result.returncode != 0:
         sys.exit(f"gh {' '.join(args[:3])}: {result.stderr.strip()}")
     return result
@@ -82,12 +82,13 @@ def main():
     parser.add_argument("--dry-run", action="store_true", help="validate and print, change nothing")
     args = parser.parse_args()
 
-    plan = json.load(open(args.plan))
+    with open(args.plan) as plan_file:
+        plan = json.load(plan_file)
     repo = plan["repo"]
     project = plan.get("project")
 
     # Validate everything before changing anything.
-    labels = {l["name"] for l in json.loads(gh("label", "list", "--repo", repo, "--limit", "300",
+    labels = {label["name"] for label in json.loads(gh("label", "list", "--repo", repo, "--limit", "300",
                                                "--json", "name").stdout)}
     milestones = {m["title"] for m in json.loads(gh("api", f"repos/{repo}/milestones?state=open&per_page=100").stdout)}
     project_id, fields = project_info(project["owner"], project["number"]) if project else (None, {})

@@ -1,0 +1,25 @@
+{
+  "name": "foundry-dev",
+  "private": true,
+  "description": "Development tooling for the Foundry plugin: linting and type-checking. Not part of the plugin itself.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "scripts": {
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "typecheck": "tsc -p .",
+    "lint:py": "uvx ruff@0.14.0 check skills",
+    "check": "npm run typecheck && npm run lint && npm run lint:py"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "eslint": "10.15.0",
+    "eslint-plugin-regexp": "3.3.3",
+    "eslint-plugin-sonarjs": "4.2.2",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.72.2"
+  },
+  "overrides": {
+    "minimatch": "11.0.8"
+  }
+}

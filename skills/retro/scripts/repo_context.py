@@ -11,7 +11,7 @@ import sys
 
 
 def gh(*args):
-    result = subprocess.run(["gh", *args], capture_output=True, text=True)
+    result = subprocess.run(["gh", *args], check=False, capture_output=True, text=True)
     if result.returncode != 0:
         sys.exit(f"gh {' '.join(args[:3])}: {result.stderr.strip()}")
     return result.stdout
@@ -94,7 +94,7 @@ def main():
         print("(warning: this list stops at 500 open issues; before filing, also search with "
               "`gh issue list --search` for each candidate's keywords)")
     for i in sorted(issues, key=lambda i: i["number"]):
-        labels = ",".join(l["name"] for l in i["labels"])
+        labels = ",".join(label["name"] for label in i["labels"])
         milestone = (i.get("milestone") or {}).get("title", "-")
         print(f"- #{i['number']} {i['title']} [{labels}] ({milestone})")
 

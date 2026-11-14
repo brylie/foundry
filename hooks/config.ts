@@ -69,8 +69,8 @@ function stripComment(line: string): string {
 function scalar(text: string): string | number | boolean {
   const t = text.trim()
   if (/^(['"]).*\1$/.test(t)) return t.slice(1, -1)
-  if (/^-?\d+(\.\d+)?$/.test(t)) return Number(t)
-  if (/^(true|false)$/i.test(t)) return t.toLowerCase() === 'true'
+  if (/^-?\d+(?:\.\d+)?$/.test(t)) return Number(t)
+  if (/^(?:true|false)$/i.test(t)) return t.toLowerCase() === 'true'
 
   return t
 }
@@ -86,11 +86,12 @@ export function parseYaml(text: string): { values: Record<string, Value>; proble
   let listKey: string | undefined
 
   text.split(/\r?\n/).forEach((raw, index) => {
-    const line = stripComment(raw).replace(/\s+$/, '')
+    const line = stripComment(raw).trimEnd()
     if (line.trim() === '' || line.trim() === '---') return
     const where = `line ${index + 1}`
 
-    const item = /^\s+-\s+(.*)$/.exec(line) ?? /^-\s+(.*)$/.exec(line)
+    // One space after the dash, the rest trimmed by scalar(): `\s+(.*)` would backtrack.
+    const item = /^\s*-\s(.*)$/.exec(line)
     if (item) {
       const list = listKey === undefined ? undefined : values[listKey]
       if (!Array.isArray(list)) {
@@ -103,7 +104,9 @@ export function parseYaml(text: string): { values: Record<string, Value>; proble
       return
     }
 
-    const pair = /^([A-Za-z_][\w-]*)\s*:\s*(.*)$/.exec(line)
+    // The value is trimmed below, so the pattern takes no space after the colon:
+    // `\s*` before `.*` would let them trade spaces and backtrack.
+    const pair = /^([a-z_][\w-]*)\s*:(.*)$/i.exec(line)
     if (!pair || /^\s/.test(line)) {
       problems.push(`${where}: not a top-level "key: value" line`)
       listKey = undefined

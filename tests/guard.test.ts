@@ -179,6 +179,15 @@ describe("the state only the mod writes", () => {
     expect(scriptRefusal('/repo/tools/clear.py', script, [], '/plugins/foundry', [4])).toBeUndefined()
   })
 
+  test('a long run of spaces after the method flag is read in linear time', async () => {
+    // Two `\s*` side by side once made this quadratic: a minute for 200,000 spaces.
+    const padded = (method: string) => `gh api -X${' '.repeat(200_000)}${method} repos/o/r/issues/3/labels\n`
+    const started = Date.now()
+    expect(scriptRefusal('/repo/tools/clear.py', padded('GET'), [], '/plugins/foundry', [3])).toBeUndefined()
+    expect(scriptRefusal('/repo/tools/clear.py', padded('DELETE'), [], '/plugins/foundry', [3])).toContain("Foundry's labels")
+    expect(Date.now() - started).toBeLessThan(1000)
+  })
+
   test('a script that would write them is refused, outside the plugin itself', async () => {
     const body = 'subprocess.run(["gh", "issue", "edit", "3", "--remove-label", "foundry:plan"])'
     expect(scriptRefusal('/repo/tools/fix.py', body, [], '/plugins/foundry')).toContain('only the Foundry mod')
