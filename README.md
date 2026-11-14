@@ -24,7 +24,7 @@ flowchart LR
   plan --> plansign{{Plan sign-off<br/>you}}
   plansign --> build[Build loop<br/>code + reviews]
   build --> buildsign{{Build sign-off<br/>you}}
-  buildsign --> ship[Ship gates<br/>online reviewers + CI]
+  buildsign --> ship[Ship gates<br/>CI + review threads]
   ship -- failure or change request --> build
   ship --> merged([You merge])
 ```
@@ -34,7 +34,7 @@ flowchart LR
 3. **You sign off** the plan.
 4. **The build loop** implements, tests and updates the docs. The reviewers review it until every one approves.
 5. **You sign off** the implementation.
-6. **The ship gates** open the pull request and wait until CI is green and your online reviewers, such as CodeRabbit, have passed the latest commit. A failure sends the work back to the build loop.
+6. **The ship gates** open the pull request and wait until CI is green and nothing your online reviewers, such as CodeRabbit, raised is still open. A failure or a change request sends the work back to the build loop.
 
 Each stage has a round limit, and reaching it escalates to you. You always merge. [Read the full walkthrough →](docs/how-it-works.md)
 

@@ -43,7 +43,7 @@ By default six reviewers must approve each loop: **product owner, usability, acc
 - **CI failures count.** A CI failure or a change request on the pull request counts as a ship round. A plain rerun of a flaky test does not.
 - **Conflicts escalate.** When reviewers want things that can't both hold, the decision comes to you. You veto one, which then counts as approved for that stage, or you write a compromise.
 - **Sign-off is yours alone.** Sign-offs come only from the panel's buttons, your answer to the question Foundry asks you, or your own `/foundry` command. A GitHub comment never counts as one, even under your account (some reviewer bots post as you), and neither does a message from another session or a plain "approved" in the chat.
-- **Decide from anywhere.** When a batch waits on you, Foundry asks you in a question card as the agent's turn ends: Approve or Request changes for a sign-off, the buttons' choices for the other waits. It shows wherever you follow the session, your phone included, where the panel doesn't. Words you type under "Other" ask for changes and reach the agent as yours. A question you dismiss isn't asked again, and the agent's message names the command to type instead, such as `/foundry approve #12`, which works from your phone too.
+- **Decide from anywhere.** When a batch waits on you, Foundry asks you in a question card as the agent's turn ends: Approve or Request changes for a sign-off, the buttons' choices for the other waits. It shows wherever you follow the session, your phone included, where the panel doesn't, and it offers every choice: past four, pick "Overrule a reviewer…" and a second question asks which. Words you type under "Other" ask for changes, or for a conflict are the compromise, and reach the agent as yours. Words that decide nothing in a wait aren't lost: the question is asked again, saying so. A wait with one choice also offers **Not yet**, which leaves it open. A question you dismiss isn't asked again, and the agent's message names the command to type instead, such as `/foundry approve #12`, which works from your phone too.
 
 ## Documentation first
 
@@ -62,13 +62,8 @@ Where each kind of doc lives is set per repository; see [doc folders](configurat
 Once the pull request is open, the mod reads it every minute and judges it only on facts GitHub records.
 
 - **CI:** every check passes. Codecov's status checks (`codecov/patch`) count as CI. No checks yet, right after a push, counts as pending, not green.
-- **Online reviewers:** each one on the [allowlist](configuration.md#the-allowlist) must review the **head commit**.
-  - Reviews and threads from anyone off the allowlist are ignored by the gate and listed for you.
-  - A review of an older commit doesn't count.
-  - Neither does a busy or rate-limited comment, such as coderabbit's "Review limit reached" or gitar's "Gitar is working".
-- **Nothing open:** no review requests changes, and no review thread is unresolved. The agent replies in threads and resolves them once fixed. An online reviewer's resolved thread still blocks until that reviewer has reviewed a commit newer than the one it was raised on, so resolving without a fix clears nothing.
-- **Comment-only reviewers:** a bot that leaves only a comment on the head commit, like gitar-bot's summary, waits for you to read it and dismiss it in the panel.
-- **Timeouts:** a reviewer silent for 30 minutes (`botTimeoutMinutes`) after a push escalates to you. You keep waiting, or dismiss it for that commit.
+- **Nothing open:** no review from the [allowlist](configuration.md#the-allowlist) requests changes, and none of its review threads is unresolved. The agent replies in threads and resolves them once fixed. An online reviewer's resolved thread still blocks until that reviewer has reviewed a commit newer than the one it was raised on, so resolving without a fix clears nothing.
+- **No waiting on the online reviewers.** The gate doesn't wait for them to review. What they find arrives as a change request or a thread, which the agent picks up, and which holds the pull request until it's fixed. Reviews and threads from anyone off the allowlist are ignored by the gate and listed for you.
 
 When all of it is green, the card says **Ready to merge**. The merge is yours; the mod sees it and closes the batch.
 
@@ -79,7 +74,7 @@ The Foundry panel sits beside the chat and shows one card per batch, moving down
 - **The track:** Plan ▸ Plan sign-off ▸ Build ▸ Build sign-off ▸ Ship ▸ Done.
 - **The round counter.**
 - **Status lights for each reviewer:** ✓ ready, ~ revise, ✗ rethink, ○ not reviewed, ⊘ vetoed.
-- **Tests and CI lights,** plus each online reviewer and the open threads.
+- **Tests and CI lights,** plus the open review threads.
 - **Anyone outside the allowlist** who commented, listed for you to read.
 - **A "waiting on you" alert** with the buttons for your decision:
 
@@ -88,8 +83,6 @@ The Foundry panel sits beside the chat and shows one card per batch, moving down
 | Sign-off | Approve, Request changes |
 | Round limit reached | Approve, Another round, Veto a reviewer (loops); Send back anyway, End batch (ship) |
 | Reviewer conflict | Veto a reviewer, I'll write a compromise |
-| Online reviewer silent | Keep waiting, Dismiss it |
-| Online reviewer comment to read | Dismiss it |
 | Ready to merge | (merge on GitHub) |
 | State edited outside Foundry | OK |
 

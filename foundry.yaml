@@ -30,4 +30,3 @@ user_docs:
 # Left out, these come from the plugin's settings:
 # reviewers: [product-owner, usability, accessibility, architecture, security, documentation]
 # max_rounds: 3
-# bot_timeout_minutes: 30

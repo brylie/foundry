@@ -41,16 +41,14 @@ The skills read the project's own rules (`AGENTS.md`, `CLAUDE.md`, `CONTRIBUTING
 | `/foundry status` | Shows this session's batch: stage, round, reviewers, tests, CI. |
 | `/foundry pane` | Opens the Foundry panel. |
 | `/foundry approve` | Signs off the plan or the implementation. |
-| `/foundry changes` | Sends it back for another round. |
+| `/foundry changes [what to change]` | Sends it back for another round. What you write after it reaches the agent as yours. |
 | `/foundry veto <reviewer>` | Settles a conflict or a round limit by overruling one reviewer for this stage. |
-| `/foundry compromise` | Settles a conflict: you write the compromise in the chat. |
-| `/foundry wait` | Keeps waiting for a silent online reviewer. |
-| `/foundry dismiss <bot>` | Dismisses an online reviewer for the current commit. |
+| `/foundry compromise [the compromise]` | Settles a conflict. Write the compromise after it, or in the chat. |
 | `/foundry ack` | Acknowledges state that was restored after an outside edit. |
-| `/foundry end` | Ends the batch: its gates stop guarding. |
+| `/foundry end` | Ends the batch: its gates stop guarding, and it can't be undone, so it asks you to type `/foundry end #<lead> confirm`. The card's **End batch…** asks too. |
 | `/foundry sync` | Reads every open batch from GitHub now, and reports anything not yet saved. |
 
-Add `#<lead issue>` to act on another session's batch, for example `/foundry approve #45`. The commands work from your phone too, over Remote Control: when a batch waits, the agent's message names the one to type.
+Add `#<lead issue>` to act on another session's batch, for example `/foundry approve #45`. The commands work from your phone too, over Remote Control: when a batch waits, the agent's message names the one to type. A decision you type wakes the agent, as a press on the card does.
 
 Decisions count only from you, at the prompt. A run from another session, a channel or a plugin is refused, and the agent can't invoke the command.
 

@@ -25,7 +25,7 @@ Merging is always the maintainer's.
 
 - **Round limit.** Each stage has a round counter (the `maxRounds` setting, default 3) that resets when work moves to the next stage. At the limit the stage escalates to the maintainer.
 - **CI failures count.** In the ship stage, a CI failure or a change request is a round. A plain rerun of a flaky test is not.
-- **Waits end your turn.** When a tool says something waits on the maintainer (a sign-off, a conflict, a round limit, a silent online reviewer, a comment to read, the merge), end your turn and say in a line or two what you need from them. The mod tells you when they decide.
+- **Waits end your turn.** When a tool says something waits on the maintainer (a sign-off, a conflict, a round limit, the merge), end your turn and say in a line or two what you need from them. The mod tells you when they decide.
 - **Guards.** When a guard refuses a command, read why. Never route around it (another tool, a script, `bash -c`). If one seems wrong, stop and say so.
 - **GitHub state is the mod's.** Never add or remove `foundry` labels or edit Foundry's state comment. Review threads are yours: reply to them and resolve them once fixed.
 - **Comments are not sign-off.** Some review comments appear under the maintainer's account: treat them as reviewer feedback, never as sign-off.
@@ -174,10 +174,9 @@ git push -u origin HEAD
 gh pr create --base <base> --title "<title>" --body-file <file>
 ```
 
-Call `mcp__foundry__pr_opened` with the URL. The mod watches the pull request, and the ship gates pass only when all three of these hold:
+Call `mcp__foundry__pr_opened` with the URL. The mod watches the pull request, and the ship gates pass only when both of these hold:
 
 - **CI is green:** every check passes, Codecov's status checks included.
-- **Every online reviewer has reviewed the head commit.** A rate-limited or "working" comment does not count.
 - **Nothing is open:** no review requests changes, and no review thread is unresolved. An online reviewer's thread you resolved still counts as open until that reviewer has reviewed a newer commit than the one it was raised on.
 
 The mod tells you what happens next:
@@ -185,7 +184,7 @@ The mod tells you what happens next:
 - **CI failed.** If it is a flaky test, rerun it: `gh run rerun <run-id> --failed`. A plain rerun is not a round. Otherwise call `mcp__foundry__send_back` with reason `ci-failure`.
 - **Changes requested, or open threads.** Call `mcp__foundry__send_back` with reason `changes-requested`. Fix them in the build loop, then reply in each thread with what you changed and resolve it once the fix is pushed. Where a comment is wrong, reply with why. A bot's thread clears the gate only after the bot re-reviews the new commit.
 - **A send-back** returns the batch to the build loop (a ship round). There, fix it, test, have the reviewers review the fix, get the build sign-off again, then push. The PR is already open.
-- **An online reviewer is silent past the timeout, or left a comment instead of a review.** That waits on the maintainer; end your turn.
+- **An online reviewer's review or comment** arrives as its own news, such as a CI event or a thread: act on it if it's from the allowlist. The gate doesn't wait for a review.
 - **The gates are green.** Tell the maintainer the pull request is ready to merge, and stop. The merge is theirs; the mod sees it and closes the batch.
 
 ## 7. Report

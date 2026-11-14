@@ -4,6 +4,24 @@ Foundry's notable changes, newest first. Versions follow [Semantic Versioning](h
 
 ## Unreleased
 
+- **The ship gate no longer waits on the online reviewers.** It passes when CI is green and no change request or review thread from the allowlist is open. What a reviewer finds still arrives as a change request or a thread, which the agent picks up, and which holds the pull request until it's fixed. Gone with the wait:
+  - the 30-minute timeout and its "Online reviewer silent" alert;
+  - the "Online reviewer comment to read" alert for comment-only reviewers such as gitar-bot;
+  - the per-reviewer lights on the card;
+  - `/foundry wait` and `/foundry dismiss`, which now say they're no longer used.
+
+  An online reviewer's thread the agent resolves still blocks until that reviewer has reviewed a newer commit, so resolving without a fix clears nothing.
+
+  **Upgrading:** a batch 0.2 left waiting on an online reviewer reads without that wait, and the next poll shows where its gate stands. `bot_timeout_minutes` in `foundry.yaml` and the `botTimeoutMinutes` plugin setting are no longer read; Foundry names the first as no longer used.
+- **Decisions from your phone reach the agent.**
+  - **A typed decision wakes the agent.** `/foundry approve #12` and the other decision commands left the agent's news in hidden context, which waits for its next turn and starts none, so a session could sit idle after you decided. A typed decision now wakes the agent, as a press on the card does.
+  - **Words with a decision reach the agent.** `/foundry changes #12 <what to change>` and `/foundry compromise #12 <the compromise>` pass on what you write; before, everything after the first word was dropped.
+  - **The question card loses nothing.**
+    - Words typed under "Other" are the compromise in a conflict.
+    - Words that decide nothing in a wait bring the question back, saying so, instead of a toast that vanished.
+    - A wait with one choice offers **Not yet** beside it, where the engine added a Yes and No that Foundry refused.
+    - Past four choices, the reviewers to overrule or dismiss are picked in a second question, so none is cut off, and the question names the commands to type.
+- **Ending a batch asks first.** The card's **End batch…** and `/foundry end #12` ask you to confirm, since ending stops the gates and can't be undone. The card no longer shows a second End button at a ship round limit.
 - **Decide from your phone.** When a batch starts waiting on you, Foundry asks in a question card as the agent's turn ends, so you can answer wherever you follow the session, the mobile app included, where the panel doesn't show. Words typed under "Other" ask for changes and reach the agent as yours. The agent's messages now name the exact command to type instead, such as `/foundry approve #12`, which already worked over Remote Control. An answer counts only for the wait it was asked about.
 - **The plan has a home.** The oversight agent writes each batch's plan to `docs/plans/<lead>.md` and revises it there; the plan stage lets that file change. Each card's **Plan** button shows it, and it's committed with the agreed docs.
 - **A change that waits its turn no longer undoes the one before it.** Changes to a batch run one at a time, but each read the batch as it stood when its press, command, tool call or poll began. One that waited behind another's GitHub write could decide on the older copy and save over the newer change: with three reviews recorded at once, the middle one was reported as recorded, then lost. Each change now reads the batch as it stands when its turn comes.

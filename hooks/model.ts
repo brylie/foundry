@@ -30,7 +30,6 @@ export function planPath(batch: Pick<Batch, 'lead'>): string {
 }
 export const DEFAULT_MAX_ROUNDS = 3
 export const DEFAULT_ONLINE_REVIEWERS = 'coderabbitai[bot]'
-export const DEFAULT_BOT_TIMEOUT_MINUTES = 30
 
 export const VERDICTS: readonly Verdict[] = ['ready', 'revise', 'rethink']
 
@@ -102,7 +101,6 @@ export type Settings = {
   maxRounds: number
   onlineReviewers: string[]
   maintainers: string[]
-  botTimeoutMinutes: number
   docs: DocFolders
 }
 
@@ -360,8 +358,6 @@ export type Decision =
   | { action: 'changes' }
   | { action: 'veto'; perspective: string }
   | { action: 'compromise' }
-  | { action: 'keep-waiting' }
-  | { action: 'dismiss'; login: string }
   | { action: 'acknowledge' }
   | { action: 'end' }
 
@@ -374,10 +370,6 @@ export function choices(batch: Batch): Decision['action'][] {
       return isLoopStage(batch.stage) ? ['approve', 'changes', 'veto'] : ['changes', 'end']
     case 'conflict':
       return ['veto', 'compromise']
-    case 'bot-timeout':
-      return ['keep-waiting', 'dismiss']
-    case 'bot-comment':
-      return ['dismiss']
     case 'tamper':
       return ['acknowledge']
     default:
@@ -410,10 +402,6 @@ export function decisionOptions(batch: Batch): DecisionOption[] {
         return (waiting?.perspectives ?? []).map(p => ({ label: `Veto ${p}`, decision: { action, perspective: p }, typed: `/foundry veto ${p} ${at}` }))
       case 'compromise':
         return [{ label: "I'll write a compromise", decision: { action }, typed: `/foundry compromise ${at}` }]
-      case 'keep-waiting':
-        return [{ label: 'Keep waiting', decision: { action }, typed: `/foundry wait ${at}` }]
-      case 'dismiss':
-        return (waiting?.bots ?? []).map(bot => ({ label: `Dismiss ${bot}`, decision: { action, login: bot }, typed: `/foundry dismiss ${bot} ${at}` }))
       case 'acknowledge':
         return [{ label: 'OK', decision: { action }, typed: `/foundry ack ${at}` }]
       case 'end':
@@ -422,6 +410,54 @@ export function decisionOptions(batch: Batch): DecisionOption[] {
         return []
     }
   })
+}
+
+/**
+ * One choice in Foundry's question card: a single option, several that a
+ * second question picks between (one per reviewer to overrule, say), or none
+ * (`Not yet`, which decides nothing and leaves the card and the commands).
+ */
+export type QuestionChoice = { label: string; options: DecisionOption[] }
+
+/** The card offers 2 to 4 choices: the engine pads fewer than two with a Yes and No that mean nothing here. */
+const MAX_CHOICES = 4
+const GROUP_LABEL: Partial<Record<Decision['action'], string>> = { veto: 'Overrule a reviewer…' }
+export const NOT_YET = 'Not yet'
+
+/**
+ * The batch's wait as the question card offers it: every option, grouped per
+ * kind once there are more than four, and never fewer than two choices.
+ */
+export function questionChoices(batch: Batch): QuestionChoice[] {
+  const options = decisionOptions(batch)
+  if (options.length === 0) return []
+  let choices: QuestionChoice[] = options.map(o => ({ label: o.label, options: [o] }))
+  if (options.length > MAX_CHOICES) {
+    choices = []
+    for (const o of options) {
+      const group = GROUP_LABEL[o.decision.action]
+      const same = choices.find(c => group !== undefined && c.label === group)
+      if (same) same.options.push(o)
+      else choices.push({ label: group ?? o.label, options: [o] })
+    }
+    // A group of one is that option itself.
+    choices = choices.map(c => (c.options.length === 1 && c.options[0] ? { label: c.options[0].label, options: c.options } : c)).slice(0, MAX_CHOICES)
+  }
+
+  return choices.length === 1 ? [...choices, { label: NOT_YET, options: [] }] : choices
+}
+
+/**
+ * What words the person types instead of a choice mean, for this wait: the
+ * changes they want, or for a conflict the compromise. Undefined where words
+ * decide nothing (a bot to dismiss, a restored state).
+ */
+export function freeTextAction(batch: Batch): 'changes' | 'compromise' | undefined {
+  const actions = decisionOptions(batch).map(o => o.decision.action)
+  if (actions.includes('changes')) return 'changes'
+  if (actions.includes('compromise')) return 'compromise'
+
+  return undefined
 }
 
 /** Where and how the person answers the batch's wait, in a sentence for the agent to pass on. */
@@ -498,18 +534,6 @@ export function decide(batch: Batch, decision: Decision, now: number): Move {
         { ...batch, waiting: undefined },
         'The person will write a compromise in the chat. Wait for it, apply it, then the reviewers in the conflict review again.',
       )
-    case 'keep-waiting': {
-      const ship = batch.ship ? { ...batch.ship, headSeenAt: now } : undefined
-
-      return { batch: log({ ...batch, ship, waiting: undefined }, now, 'The person chose to keep waiting for the online reviewers.') }
-    }
-    case 'dismiss': {
-      if (batch.ship === undefined) return { batch, error: 'There is no pull request yet.' }
-      const login = loginKey(decision.login)
-      const ship = { ...batch.ship, dismissed: [...new Set([...batch.ship.dismissed, `${login}@${batch.ship.head}`])] }
-
-      return { batch: log({ ...batch, ship, waiting: undefined }, now, `The person dismissed ${login} for this commit.`) }
-    }
     case 'acknowledge':
       return { batch: log({ ...batch, waiting: undefined }, now, 'The person acknowledged the restored state.') }
   }
@@ -525,14 +549,11 @@ export function prOpened(batch: Batch, pr: number, url: string, now: number): Mo
     pr,
     url,
     head: '',
-    headSeenAt: now,
     ci: 'pending' as const,
     checks: [],
-    bots: [],
     openThreads: 0,
     isMerged: false,
     checkedAt: 0,
-    dismissed: [],
     outsiders: [],
   }
 
