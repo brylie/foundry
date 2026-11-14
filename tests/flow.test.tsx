@@ -533,6 +533,27 @@ test('a takeover posted as a new comment stands, even over a write of this sessi
   expect(review.deny).toContain('runs no Foundry batch')
 })
 
+test('a takeover posted as a new comment past writes still failing stands at the next sync too', async ($, on) => {
+  const { hub } = engine(on)
+  await $.session.start({ cwd: '/repo', surface: 'desktop', isInteractive: true })
+  await $.tool.call({ tool: 'mcp__foundry__batch_start', title: 'T', issues: [12] })
+  // Two revisions never land: this session's copy runs two ahead of GitHub, one ahead of the takeover.
+  for (const perspective of ['security', 'usability']) {
+    hub.failOnce(/-X PATCH .*issues\/comments\//)
+    await $.tool.call({ tool: 'mcp__foundry__review_record', perspective, reviewer: 'r', verdict: 'ready', summary: 's' })
+  }
+  repostState(hub, 1, body => body.replace('"owner":"session-1"', '"owner":"session-2"').replace(/"title":"[^"]*"/, '"title":"Taken over"'))
+
+  for (let i = 0; i < 2; i++) await $.command.run({ command: 'foundry', args: 'sync', origin: { kind: 'composer' }, presentation: SHOWN })
+
+  expect((hub.comments.get(12) ?? []).filter(c => c.body.includes('foundry:state')).length).toBe(1)
+  expect(hub.state(12)?.owner).toBe('session-2')
+  expect(hub.state(12)?.title).toBe('Taken over')
+  // This session's own copy holds the takeover too, not its copy from before.
+  const status = await $.command.run({ command: 'foundry', args: 'status #12', origin: { kind: 'composer' }, presentation: SHOWN })
+  expect(status.text).toContain('Taken over')
+})
+
 test('an outside edit to a batch another session runs is left to that session to restore', async ($, on) => {
   const { hub } = engine(on)
   await $.session.start({ cwd: '/repo', surface: 'desktop', isInteractive: true })

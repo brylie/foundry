@@ -408,14 +408,18 @@ async function sync($: EngineInterface): Promise<{ error?: string }> {
     if (ours.repo !== repo || !isActive(ours) || meta.mine === key) merged.push(ours)
   }
 
-  // A change made while GitHub was being read stands: per batch, the newer revision is kept, and a
-  // batch that appeared meanwhile (a batch_start) is kept too.
+  // A change made while GitHub was being read stands: a batch this session changed since it read
+  // its own copy keeps that change where it is newer, and a batch that appeared meanwhile (a
+  // batch_start) is kept too. A copy merely left ahead by writes that never landed does not stand
+  // over what was merged, such as a takeover.
   const seen = new Set(local.map(batchKey))
   await update($, batchesAtom, current => {
     const result = merged.map(b => {
       const now = current.find(c => batchKey(c) === batchKey(b))
+      const before = local.find(c => batchKey(c) === batchKey(b))
+      const isChangedMeanwhile = now !== undefined && (before === undefined || now.rev > before.rev)
 
-      return now !== undefined && now.rev > b.rev ? now : b
+      return now !== undefined && isChangedMeanwhile && now.rev > b.rev ? now : b
     })
     const added = current.filter(c => !seen.has(batchKey(c)) && !result.some(b => batchKey(b) === batchKey(c)))
 
