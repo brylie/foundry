@@ -180,13 +180,42 @@ function engine(on: On) {
     return { text: e.text }
   })
   on('session.start', (_, e) => ({ cwd: e.cwd }))
-  on('tool.call', (_, e) => {
+  on('turn.complete', (_, e) => ({ text: e.answer }))
+  /**
+   * Foundry's questions to the person, and how each is answered: a label, typed words, or dismissed.
+   * `answer` answers every question; `answerAt`, when set, answers the question at that index instead.
+   */
+  const asks = {
+    questions: [] as string[],
+    answer: undefined as string | undefined,
+    answerAt: undefined as ((index: number) => string | undefined) | undefined,
+    held: undefined as Promise<void> | undefined,
+  }
+  /** The files of the checkout `$.fs.read` finds, by absolute path. */
+  const files = new Map<string, string>()
+  on('fs.read', (_, e) => {
+    const text = files.get(e.path)
+    if (text === undefined) throw new Error(`ENOENT: ${e.path}`)
+
+    return { value: text }
+  })
+  on('tool.call', async (_, e) => {
     if (e.tool === 'Bash') ran.push(e.command)
+    if (e.tool === 'AskUserQuestion') {
+      const question = (e as unknown as { questions: { question: string }[] }).questions[0]?.question ?? ''
+      const index = asks.questions.push(question) - 1
+      // A question the person leaves open answers only once the test lets it.
+      if (asks.held) await asks.held
+      const answer = asks.answerAt ? asks.answerAt(index) : asks.answer
+      if (answer === undefined) return { deny: 'dismissed' }
+
+      return { result: { answers: { [question]: answer } } }
+    }
 
     return { result: {} }
   })
 
-  return { hub, prompts, ran, submit, clock, gate }
+  return { hub, prompts, ran, submit, clock, gate, asks, files }
 }
 
 async function approveAll($: Engine) {
@@ -301,6 +330,141 @@ test('an edit to the state comment made around the mod is restored and flagged',
 
   expect(hub.state(12)?.stage).toBe('plan')
   expect(hub.state(12)?.waiting?.kind).toBe('tamper')
+})
+
+/** A batch at its plan sign-off, every reviewer approving. */
+async function toPlanSignoff($: Engine) {
+  await $.session.start({ cwd: '/repo', surface: 'desktop', isInteractive: true })
+  await $.tool.call({ tool: 'mcp__foundry__batch_start', title: 'T', issues: [12] })
+  await approveAll($)
+
+  return $.tool.call({ tool: 'mcp__foundry__signoff_request', summary: 'Two issues, one shared slot type.' })
+}
+
+test('the person is asked at a sign-off, and their answer decides it, from wherever they are', async ($, on) => {
+  const { hub, asks, clock } = engine(on)
+  asks.answer = 'Approve'
+  const asked = await toPlanSignoff($)
+  // The agent is told where and how the person answers, the typed commands included.
+  expect(String(asked.result)).toContain('`/foundry approve #12`')
+  expect(String(asked.result)).toContain('(from their phone too)')
+
+  // The agent's turn ends at the gate: the person is asked there and then.
+  await $.turn.complete({ answer: 'Waiting on your sign-off.', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer' } as never)
+  await clock.settle()
+
+  expect(asks.questions).toHaveLength(1)
+  expect(asks.questions[0]).toContain('Two issues, one shared slot type.')
+  expect(hub.state(12)?.stage).toBe('build')
+  // A later tick asks nothing more: the wait was answered.
+  await clock.advance(60_000)
+  expect(asks.questions).toHaveLength(1)
+})
+
+test('words typed instead of a choice ask for changes, and reach the agent as the person’s', async ($, on) => {
+  const { hub, asks, clock } = engine(on)
+  asks.answer = 'Split the slot type out first.'
+  await toPlanSignoff($)
+  await clock.advance(60_000)
+
+  expect(hub.state(12)?.stage).toBe('plan')
+  expect(hub.state(12)?.waiting).toBeUndefined()
+  expect(hub.state(12)?.log.some(e => e.isForAgent === true && e.text === 'The person wrote: Split the slot type out first.')).toBe(true)
+})
+
+test('a dismissed question is not asked again; the card and the typed command still decide', async ($, on) => {
+  const { hub, asks, clock } = engine(on)
+  await toPlanSignoff($)
+  await clock.advance(60_000)
+  await clock.advance(60_000)
+  expect(asks.questions).toHaveLength(1)
+
+  // Waiting, the agent is refused and told how the person decides.
+  const review = await $.tool.call({ tool: 'mcp__foundry__review_record', perspective: 'security', reviewer: 'r', verdict: 'ready', summary: 's' })
+  expect(review.deny).toContain('`/foundry approve #12` or `/foundry changes #12`')
+  // Typed from the phone, over Remote Control.
+  const approved = await $.command.run({ command: 'foundry', args: 'approve #12', origin: { kind: 'bridge' }, presentation: SHOWN })
+  expect(approved.text).toContain('Done: approve')
+  expect(hub.state(12)?.stage).toBe('build')
+})
+
+test('a question answered after its gate was decided elsewhere decides nothing, not even the next gate', async ($, on) => {
+  const { hub, asks, clock } = engine(on)
+  let answer = () => {}
+  asks.held = new Promise<void>(resolve => (answer = resolve))
+  await toPlanSignoff($)
+  void clock.advance(60_000)
+  await clock.settle()
+  expect(asks.questions).toHaveLength(1)
+
+  // The person approves the plan on the desktop; the build reaches its own sign-off.
+  await $.command.run({ command: 'foundry', args: 'approve #12', origin: { kind: 'composer' }, presentation: SHOWN })
+  await approveAll($)
+  await $.tool.call({ tool: 'mcp__foundry__signoff_request', summary: 'build' })
+
+  // The plan's question, still open on the phone, is answered at last.
+  asks.answer = 'Approve'
+  answer()
+  await clock.settle()
+
+  expect(hub.state(12)?.stage).toBe('build')
+  expect(hub.state(12)?.waiting?.kind).toBe('signoff')
+})
+
+test("a reviewer's comment question left open is no answer to the same kind of comment on a newer head", async ($, on) => {
+  const { hub, asks, clock } = engine(on)
+  let answer = () => {}
+  asks.held = new Promise<void>(resolve => (answer = resolve))
+  hub.setConfig('online_reviewers:\n  - coderabbitai[bot]\n  - gitar-bot[bot]\nmaintainers: [maintainer]\n')
+  await toShip($)
+  expect(hub.state(12)?.waiting?.kind).toBe('bot-comment')
+  void clock.advance(60_000)
+  await clock.settle()
+  expect(asks.questions).toHaveLength(1)
+
+  // A push: a new head, and gitar-bot's fresh summary on it, the same kind of wait.
+  const newHead = 'cafe0000b2'
+  hub.setPr({
+    headRefOid: newHead,
+    reviews: { nodes: [{ author: { login: 'coderabbitai' }, state: 'COMMENTED', submittedAt: '', commit: { oid: newHead } }] },
+    comments: { nodes: [{ author: { login: 'gitar-bot' }, body: 'Verification: no issues', updatedAt: new Date(5_000_000).toISOString() }] },
+  })
+  void clock.advance(60_000)
+  await clock.settle()
+  expect(hub.state(12)?.ship?.head).toBe(newHead)
+  expect(hub.state(12)?.waiting?.kind).toBe('bot-comment')
+
+  // The new head's comment is a wait of its own: the person is asked about it afresh.
+  expect(asks.questions).toHaveLength(2)
+
+  // The old head's question is answered at last, the new one left open: it dismisses nothing on the new head.
+  asks.answerAt = index => (index === 0 ? 'Dismiss gitar-bot' : undefined)
+  answer()
+  await clock.settle()
+  expect(hub.state(12)?.waiting?.kind).toBe('bot-comment')
+  expect(hub.state(12)?.ship?.dismissed).not.toContain(`gitar-bot@${newHead}`)
+})
+
+test("a card shows the batch's plan file from this checkout, at a press", async ($, on) => {
+  const { files } = engine(on)
+  await $.session.start({ cwd: '/repo', surface: 'desktop', isInteractive: true })
+  const started = await $.tool.call({ tool: 'mcp__foundry__batch_start', title: 'T', issues: [12] })
+  expect(String(started.result)).toContain('Plan: docs/plans/12.md')
+  // The plan stage lets the agent write the plan, and still no code.
+  expect((await $.tool.call({ tool: 'Write', file_path: '/repo/docs/plans/12.md', content: '# Plan' })).deny).toBeUndefined()
+  expect((await $.tool.call({ tool: 'Write', file_path: '/repo/docs/plans/13.md', content: '# Plan' })).deny).toContain('no approved plan')
+
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await ui.press({ key: '12-plan' })
+  expect(await ui.find({ type: 'Text', text: /No plan in this checkout yet/ })).toBeDefined()
+  await ui.press({ key: '12-plan' })
+
+  files.set('/repo/docs/plans/12.md', '# Plan for T\n\nBuild the slot type first.')
+  await ui.press({ key: '12-plan' })
+  expect(await ui.find({ type: 'Markdown', text: /Build the slot type first/ })).toBeDefined()
+  await ui.press({ key: '12-plan' })
+  expect(await ui.find({ type: 'Markdown', text: /Build the slot type first/ })).toBeUndefined()
+  await ui.unmount()
 })
 
 test('the round limit and reviewer conflicts escalate to the person', { options: { maxRounds: 2 } }, async ($, on) => {
@@ -856,6 +1020,22 @@ test('a doc folder that is itself a link still takes its plan-loop edits, by Edi
   // The link's target outside the doc folders is still code.
   expect((await $.tool.call({ tool: 'Write', file_path: '/repo/product/../src/a.ts', content: 'x', agentId: 'po-1' })).deny).toContain("doesn't edit")
   expect(ran).toEqual(['printf x >> docs/product/slots.md', 'printf x >> docs/product/slots.md'])
+})
+
+test('a plan folder that is a link still takes the plan, by Edit and by shell, and nothing else', async ($, on) => {
+  const { ran } = engine(on)
+  // docs/plans is a link to /repo/plan-files.
+  on('fs.stat', (_, e) => ({
+    value: { kind: 'file', size: 0, mtimeMs: 0, isLink: false, realPath: e.path.replace(/^\/repo\/docs\/plans(?=\/|$)/, '/repo/plan-files') } as never,
+  }))
+  await $.session.start({ cwd: '/repo', surface: 'desktop', isInteractive: true })
+  await $.tool.call({ tool: 'mcp__foundry__batch_start', title: 'T', issues: [12] })
+
+  expect((await $.tool.call({ tool: 'Write', file_path: '/repo/docs/plans/12.md', content: '# Plan' })).deny).toBeUndefined()
+  expect((await $.tool.call({ tool: 'Bash', command: 'printf x >> docs/plans/12.md' })).deny).toBeUndefined()
+  // Another file through the same link is still held.
+  expect((await $.tool.call({ tool: 'Write', file_path: '/repo/docs/plans/13.md', content: 'x' })).deny).toContain('no approved plan')
+  expect(ran).toEqual(['printf x >> docs/plans/12.md'])
 })
 
 test('with no batch, nothing is guarded but merging, and the panel says so', async ($, on) => {

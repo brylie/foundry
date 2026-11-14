@@ -7,10 +7,13 @@ import {
   choices,
   currentRound,
   decide,
+  decisionOptions,
+  howToDecide,
   isAllApproved,
   newBatch,
   parseLogins,
   parseReviewers,
+  planPath,
   raiseConflict,
   recordReview,
   requestSignoff,
@@ -49,6 +52,27 @@ function signOff(batch: Batch): Batch {
 
   return decide(asked, { action: 'approve' }, 2).batch
 }
+
+describe('deciding away from the panel', () => {
+  test('each wait offers its choices with the panel’s labels and the command that does the same', async () => {
+    const signoff = requestSignoff(approveAll(start()), 'please', 1).batch
+    expect(decisionOptions(signoff).map(o => [o.label, o.typed])).toEqual([
+      ['Approve', '/foundry approve #12'],
+      ['Request changes', '/foundry changes #12'],
+    ])
+    expect(howToDecide(signoff)).toContain('`/foundry approve #12` or `/foundry changes #12` (from their phone too).')
+
+    const conflict = raiseConflict(start(), ['usability', 'security'], 'X or Y', 1).batch
+    expect(decisionOptions(conflict).map(o => o.typed)).toEqual(['/foundry veto usability #12', '/foundry veto security #12', '/foundry compromise #12'])
+    expect(decisionOptions(conflict)[1]?.decision).toEqual({ action: 'veto', perspective: 'security' })
+  })
+
+  test('nothing to decide, nothing offered: the plan path is the lead issue’s', async () => {
+    expect(decisionOptions(start())).toEqual([])
+    expect(howToDecide(start())).not.toContain('typing')
+    expect(planPath(start())).toBe('docs/plans/12.md')
+  })
+})
 
 describe('settings', () => {
   test('perspectives and logins have one spelling each', async () => {

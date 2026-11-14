@@ -41,7 +41,7 @@ Each stage holds back the steps that belong to a later one (see [the stages](how
 
 ## Who can decide
 
-- **Sign-offs come from you, at your machine.** The panel's buttons, or your own `/foundry` command. A GitHub comment never counts as sign-off, even under your account, and neither does a message from another session, a channel or a plugin.
+- **Sign-offs come from you.** The panel's buttons, your answer in Foundry's question card, or your own `/foundry` command, typed at the machine or sent from your phone over Remote Control. A GitHub comment never counts as sign-off, even under your account, and neither does a message from another session, a channel or a plugin, nor a plain chat message the agent reads. The agent can't answer Foundry's question: only your answer to the dialog reaches the mod. An answer counts for the wait it was asked about alone, so a question left open while you decide elsewhere can't decide a later gate.
 - **Only the allowlist gives feedback.** The ship gate and the agent take reviews and comments only from the [allowlist](configuration.md#the-allowlist). Anyone else's text is listed for you and never reaches the agent as an instruction.
 - **The rules come from the default branch.** `foundry.yaml` is read from the default branch only, so a pull request can't change the rules it is judged by.
 

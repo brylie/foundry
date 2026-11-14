@@ -4,7 +4,7 @@
 // would accept what these rules refuse.
 
 import type { Batch } from '../types'
-import { PLAN_DOCS, WAIT_LABEL } from './model'
+import { PLAN_DOCS, WAIT_LABEL, planPath } from './model'
 
 /** An outward step a stage holds back. */
 export type Action = 'commit' | 'claim' | 'push' | 'open-pr' | 'merge'
@@ -170,28 +170,38 @@ export function planDocFolders(batch: Batch, root: string): string[] {
   return PLAN_DOCS.flatMap(kind => batch.docs[kind]).map(folder => `${normal(root)}/${folder}`)
 }
 
+/**
+ * Whether `path` is the batch's plan file, which the oversight agent writes in
+ * the plan loop. `planFile` is that file as a real path, when the caller
+ * resolved it: a write judged by its real path is compared with it, so a plan
+ * folder that is itself a link still takes the plan.
+ */
+export function isPlanFile(batch: Batch, root: string, path: string, planFile = `${normal(root)}/${planPath(batch)}`): boolean {
+  return path.startsWith('/') && normal(path) === normal(planFile)
+}
+
 /** Whether `path` is one of the docs the plan loop writes, before any code. */
 export function isPlanDoc(batch: Batch, root: string, path: string, folders: string[] = planDocFolders(batch, root)): boolean {
   return path.startsWith('/') && folders.some(folder => isInside(folder, path))
 }
 
 /**
- * `folders` are the plan-loop doc folders as real paths, when the caller
+ * `folders` are the plan-loop doc folders, and `planFile` the batch's plan, as real paths, when the caller
  * resolved them: a write judged by its real path is compared with folders
  * judged the same way, so a doc folder that is itself a link still counts.
  */
-export function editRefusal(batch: Batch, root: string, path: string, folders?: string[]): string | undefined {
+export function editRefusal(batch: Batch, root: string, path: string, folders?: string[], planFile?: string): string | undefined {
   if (batch.stage === 'done' || !isGuardedPath(root, path)) return undefined
   if (batch.waiting !== undefined && batch.waiting.kind !== 'merge') {
     return `Foundry: "${batch.title}" is waiting on the person (${WAIT_LABEL[batch.waiting.kind]}); files in the repository stay unchanged until they decide.`
   }
   if (batch.stage === 'build') return undefined
   if (batch.stage === 'plan') {
-    // Docs first: requirements, specifications and decisions are written and reviewed with the plan.
-    if (isPlanDoc(batch, root, path, folders)) return undefined
+    // Docs first: the plan, the requirements, specifications and decisions are written and reviewed together.
+    if (isPlanFile(batch, root, path, planFile) || isPlanDoc(batch, root, path, folders)) return undefined
     const named = PLAN_DOCS.flatMap(kind => batch.docs[kind]).join(', ') || 'none set'
 
-    return `Foundry: "${batch.title}" has no approved plan yet, so code stays unchanged. Before the plan sign-off only the requirements, specification and decision docs (${named}) are written, with notes outside the repository or under its .claude/ folder.`
+    return `Foundry: "${batch.title}" has no approved plan yet, so code stays unchanged. Before the plan sign-off only the plan (${planPath(batch)}) and the requirements, specification and decision docs (${named}) are written, with notes outside the repository or under its .claude/ folder.`
   }
 
   return `Foundry: "${batch.title}" is shipping. To change code, call mcp__foundry__send_back first: fixes happen in the build loop.`

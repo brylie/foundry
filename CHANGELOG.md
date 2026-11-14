@@ -4,6 +4,8 @@ Foundry's notable changes, newest first. Versions follow [Semantic Versioning](h
 
 ## Unreleased
 
+- **Decide from your phone.** When a batch starts waiting on you, Foundry asks in a question card as the agent's turn ends, so you can answer wherever you follow the session, the mobile app included, where the panel doesn't show. Words typed under "Other" ask for changes and reach the agent as yours. The agent's messages now name the exact command to type instead, such as `/foundry approve #12`, which already worked over Remote Control. An answer counts only for the wait it was asked about.
+- **The plan has a home.** The oversight agent writes each batch's plan to `docs/plans/<lead>.md` and revises it there; the plan stage lets that file change. Each card's **Plan** button shows it, and it's committed with the agreed docs.
 - **A change that waits its turn no longer undoes the one before it.** Changes to a batch run one at a time, but each read the batch as it stood when its press, command, tool call or poll began. One that waited behind another's GitHub write could decide on the older copy and save over the newer change: with three reviews recorded at once, the middle one was reported as recorded, then lost. Each change now reads the batch as it stands when its turn comes.
 - **No more false "changed outside the mod" alerts.** A sync flagged an outside edit, and wrote its own copy back, in cases where nothing outside had changed:
   - It read the session's own write between the comment and the labels.

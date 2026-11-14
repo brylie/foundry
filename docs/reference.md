@@ -50,7 +50,7 @@ The skills read the project's own rules (`AGENTS.md`, `CLAUDE.md`, `CONTRIBUTING
 | `/foundry end` | Ends the batch: its gates stop guarding. |
 | `/foundry sync` | Reads every open batch from GitHub now, and reports anything not yet saved. |
 
-Add `#<lead issue>` to act on another session's batch, for example `/foundry approve #45`.
+Add `#<lead issue>` to act on another session's batch, for example `/foundry approve #45`. The commands work from your phone too, over Remote Control: when a batch waits, the agent's message names the one to type.
 
 Decisions count only from you, at the prompt. A run from another session, a channel or a plugin is refused, and the agent can't invoke the command.
 

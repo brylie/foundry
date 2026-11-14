@@ -181,6 +181,7 @@ export type Meta = {
 
 declare module 'claude-code' {
   interface PluginState {
-    foundry: { batches: Shaped<Batch[]>; meta: Shaped<Meta> }
+    /** `plansShown`: the batches whose card shows its plan, by key; the panel's own, never written to GitHub. */
+    foundry: { batches: Shaped<Batch[]>; meta: Shaped<Meta>; plansShown: Shaped<string[]> }
   }
 }

@@ -42,14 +42,16 @@ By default six reviewers must approve each loop: **product owner, usability, acc
 - **Counters reset forward.** The round counter resets when work moves to the next stage.
 - **CI failures count.** A CI failure or a change request on the pull request counts as a ship round. A plain rerun of a flaky test does not.
 - **Conflicts escalate.** When reviewers want things that can't both hold, the decision comes to you. You veto one, which then counts as approved for that stage, or you write a compromise.
-- **Sign-off is yours alone.** Sign-offs come only from the panel's buttons or your own `/foundry` command. A GitHub comment never counts as one, even under your account (some reviewer bots post as you), and neither does a message from another session.
+- **Sign-off is yours alone.** Sign-offs come only from the panel's buttons, your answer to the question Foundry asks you, or your own `/foundry` command. A GitHub comment never counts as one, even under your account (some reviewer bots post as you), and neither does a message from another session or a plain "approved" in the chat.
+- **Decide from anywhere.** When a batch waits on you, Foundry asks you in a question card as the agent's turn ends: Approve or Request changes for a sign-off, the buttons' choices for the other waits. It shows wherever you follow the session, your phone included, where the panel doesn't. Words you type under "Other" ask for changes and reach the agent as yours. A question you dismiss isn't asked again, and the agent's message names the command to type instead, such as `/foundry approve #12`, which works from your phone too.
 
 ## Documentation first
 
 A change isn't done until what people read about it is true, so Foundry treats docs as part of the work.
 
 - **The docs pass, in the plan loop, before any code.** The product owner updates the **requirements**: what users can do, and why. Then architecture writes the technical design into the **specification** beside the product owner's section, and adds a **decision record** for each significant choice. Every reviewer reviews the plan and that doc diff together, and your plan sign-off agrees both.
-- **Only docs before the sign-off.** In the plan stage the mod lets the requirement, specification and decision folders change, and nothing else. A reviewer agent may edit those folders only while the batch is planning, and never commits, pushes or touches code.
+- **The plan is a file.** The oversight agent writes the plan to `docs/plans/<lead issue>.md` on the batch's branch and revises it there. Each card's **Plan** button shows it, read from your checkout, and it's committed with the agreed docs once you sign it off.
+- **Only docs before the sign-off.** In the plan stage the mod lets the plan file and the requirement, specification and decision folders change, and nothing else. A reviewer agent may edit those folders only while the batch is planning, and never commits, pushes or touches code.
 - **Docs with the code, in the build loop.** The first commit is the docs you agreed. User and reference docs, help pages, the README and the changelog change in the same commits as the code they describe. If the code has to differ from the agreed spec, the agent stops and asks you.
 - **A documentation reviewer, in both loops.** In the plan loop it checks that the plan names every doc the change touches. In the build loop it checks that each one was updated, matches the code, and that nothing went stale.
 
@@ -91,4 +93,6 @@ The Foundry panel sits beside the chat and shows one card per batch, moving down
 | Ready to merge | (merge on GitHub) |
 | State edited outside Foundry | OK |
 
-Every button has a `/foundry` command too; see [Reference](reference.md#the-foundry-command).
+Every button has a `/foundry` command too; see [Reference](reference.md#the-foundry-command). Each card also has a **Plan** button that shows the batch's plan file.
+
+The panel shows on the desktop app and in the terminal. On your phone, answer in the question card Foundry asks, or type the command.
