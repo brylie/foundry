@@ -2,7 +2,7 @@
 
 **From GitHub issue to merged pull request, with agents doing the work and you holding the gates.**
 
-[![Version](https://img.shields.io/badge/version-0.2.0-5319e7)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.3.0-5319e7)](CHANGELOG.md)
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
 [![Claude Code](https://img.shields.io/badge/Claude%20Code-2.1.321%2B-d97757)](https://claude.com/claude-code)
 
