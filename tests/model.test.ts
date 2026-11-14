@@ -2,6 +2,7 @@ import { describe, expect, test } from 'claude-code/testing'
 
 import type { Batch, Verdict } from '../types'
 import {
+  NO_DOCS,
   appendLog,
   choices,
   currentRound,
@@ -25,6 +26,7 @@ const SETTINGS = {
   onlineReviewers: parseLogins('coderabbitai[bot],gitar-bot[bot]'),
   maintainers: ['brylie'],
   botTimeoutMinutes: 30,
+  docs: NO_DOCS,
 }
 
 function start(): Batch {
@@ -131,6 +133,16 @@ describe('review findings', () => {
     expect(batch.log).toHaveLength(60)
     expect(batch.log.at(-1)?.n).toBe(71)
     expect(batch.log[0]?.n).toBe(12)
+  })
+
+  test('a record 0.1.0 wrote, with no doc folders, still reads, its stage and reviews kept', async () => {
+    const reviewed = review(start(), 'security', 'revise').batch
+    const { docs: _, ...old } = { ...reviewed, waiting: { kind: 'signoff' as const, summary: 's', at: 1 } }
+    const body = renderState(reviewed).replace(/```json\n[\s\S]*?\n```/, '```json\n' + JSON.stringify({ foundry: 1, batch: old }) + '\n```')
+    const read = parseState(body)
+    expect(read?.docs).toEqual({ requirements: [], specifications: [], decisions: [], user: [] })
+    expect(read?.reviews).toEqual(reviewed.reviews)
+    expect(read?.waiting?.kind).toBe('signoff')
   })
 
   test('a state record missing fields is skipped, not trusted', async () => {

@@ -90,6 +90,22 @@ export type Ship = {
 export type LogEntry = { n: number; at: number; text: string; isForAgent?: boolean }
 
 /**
+ * Where a repository keeps each kind of documentation, as paths relative to
+ * its root. Requirements, specifications and decisions are written in the
+ * plan loop, before any code; user docs change with the code in the build.
+ */
+export type DocFolders = {
+  /** Product requirements: the product owner maintains them. */
+  requirements: string[]
+  /** Specifications: architecture co-authors them with the product owner. */
+  specifications: string[]
+  /** Architecture decision records. */
+  decisions: string[]
+  /** Reference and user docs, the README, the changelog. */
+  user: string[]
+}
+
+/**
  * A batch: related issues on their way to one pull request. The record
  * lives in GitHub, in one state comment on the lead issue, with labels on
  * every issue and the pull request; the mod alone writes it.
@@ -130,6 +146,8 @@ export type Batch = {
    */
   onlineReviewers: string[]
   maintainers: string[]
+  /** The repository's doc folders: the plan loop may edit requirements, specifications and decisions. */
+  docs: DocFolders
   botTimeoutMinutes: number
   /** The session that runs the batch. */
   owner: string

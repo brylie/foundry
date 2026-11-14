@@ -73,11 +73,26 @@ export function parseState(body: string): Batch | undefined {
   if (!match?.[1]) return undefined
   try {
     const data = JSON.parse(match[1]) as { foundry?: unknown; batch?: unknown }
+    if (data.foundry !== STATE_VERSION) return undefined
+    const batch = migrate(data.batch)
 
-    return data.foundry === STATE_VERSION && isBatch(data.batch) ? data.batch : undefined
+    return isBatch(batch) ? batch : undefined
   } catch {
     return undefined
   }
+}
+
+/**
+ * Brings a record an earlier Foundry wrote up to this one's shape, keeping
+ * its stage, rounds, reviews and pending decision. Version 0.1.0 had no doc
+ * folders: such a batch gets none, so its plan stage stays code-and-docs
+ * read-only as it was, and a new batch finds the folders when it starts.
+ */
+export function migrate(batch: unknown): unknown {
+  if (!isObject(batch)) return batch
+  if (batch['docs'] === undefined) return { ...batch, docs: { requirements: [], specifications: [], decisions: [], user: [] } }
+
+  return batch
 }
 
 // ---------------------------------------------------------------------------
@@ -176,6 +191,8 @@ export function isBatch(v: unknown): v is Batch {
     isInt(v['maxRounds']) &&
     isListOf(v['onlineReviewers'], isString) &&
     isListOf(v['maintainers'], isString) &&
+    isObject(v['docs']) &&
+    ['requirements', 'specifications', 'decisions', 'user'].every(kind => isListOf((v['docs'] as Shape)[kind], isString)) &&
     isNumber(v['botTimeoutMinutes']) &&
     isString(v['owner']) &&
     isOptional(v['commentId'], isInt) &&

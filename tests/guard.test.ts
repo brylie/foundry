@@ -2,18 +2,22 @@ import { describe, expect, test } from 'claude-code/testing'
 
 import type { Batch } from '../types'
 import {
+  UNPLACED,
   absoluteTarget,
   bashActions,
   editRefusal,
   isGuardedPath,
+  isReviewerAgent,
   refusal,
+  reviewerEditRefusal,
   scriptRefusal,
   shellWriteTargets,
   stateRefusal,
 } from '../hooks/guard'
 import { newBatch } from '../hooks/model'
 
-const SETTINGS = { reviewers: ['security'], maxRounds: 3, onlineReviewers: [], maintainers: [], botTimeoutMinutes: 30 }
+const DOCS = { requirements: ['docs/product'], specifications: ['docs/design'], decisions: ['docs/adr'], user: ['README.md'] }
+const SETTINGS = { reviewers: ['security'], maxRounds: 3, onlineReviewers: [], maintainers: [], botTimeoutMinutes: 30, docs: DOCS }
 const plan = newBatch({ repo: 'o/r', title: 'T', issues: [1], owner: 's' }, SETTINGS, 0)
 const at = (stage: Batch['stage'], extra: Partial<Batch> = {}): Batch => ({ ...plan, stage, ...extra })
 
@@ -64,6 +68,51 @@ describe('shell writes', () => {
     expect(absoluteTarget('src/a.ts', '/repo')).toBe('/repo/src/a.ts')
     expect(absoluteTarget('/tmp/x', '/repo')).toBe('/tmp/x')
     expect(absoluteTarget('~/notes', '/repo')).toBeUndefined()
+  })
+})
+
+describe('docs first', () => {
+  test('the plan loop writes requirements, specifications and decisions, but no code', async () => {
+    expect(editRefusal(at('plan'), '/repo', '/repo/docs/product/requirements.md')).toBeUndefined()
+    expect(editRefusal(at('plan'), '/repo', '/repo/docs/design/sub-patches.md')).toBeUndefined()
+    expect(editRefusal(at('plan'), '/repo', '/repo/docs/adr/0042-slots.md')).toBeUndefined()
+    // User docs change with the code, in the build loop.
+    expect(editRefusal(at('plan'), '/repo', '/repo/README.md')).toContain('no approved plan')
+    expect(editRefusal(at('plan'), '/repo', '/repo/src/slot.rs')).toContain('docs/product, docs/design, docs/adr')
+    expect(editRefusal(at('plan'), '/repo', '/repo/docs/productivity.md')).toContain('no approved plan')
+  })
+
+  test('a reviewer agent edits only the plan-loop docs, and only while the batch is planning', async () => {
+    expect(isReviewerAgent('foundry:product-owner')).toBe(true)
+    expect(isReviewerAgent('foundry:oversight')).toBe(false)
+    expect(isReviewerAgent('general-purpose')).toBe(false)
+
+    expect(reviewerEditRefusal(at('plan'), '/repo', '/repo/docs/product/requirements.md')).toBeUndefined()
+    expect(reviewerEditRefusal(at('plan'), '/repo', '/repo/src/slot.rs')).toContain("doesn't edit the repository")
+    expect(reviewerEditRefusal(at('build'), '/repo', '/repo/docs/design/sub-patches.md')).toContain("doesn't edit the repository")
+    const signoff = at('plan', { waiting: { kind: 'signoff', summary: 's', at: 1 } })
+    expect(reviewerEditRefusal(signoff, '/repo', '/repo/docs/product/requirements.md')).toContain("doesn't edit the repository")
+    // Its own notes outside the repository are its own business.
+    expect(reviewerEditRefusal(at('build'), '/repo', '/tmp/review-notes.md')).toBeUndefined()
+    // A path it can't place is judged as one inside the repository.
+    expect(reviewerEditRefusal(at('build'), '/repo', 'src/slot.rs')).toContain("doesn't edit the repository")
+  })
+
+  test('a write the guard cannot place is held even when a doc folder is as broad as the root', async () => {
+    const broad = at('plan', { docs: { ...DOCS, requirements: ['.'] } })
+    const unplaced = `/repo/${UNPLACED}`
+    // Checked against doc folders, the root-wide folder would let it through: so it is checked against none.
+    expect(editRefusal(broad, '/repo', unplaced)).toBeUndefined()
+    expect(editRefusal(broad, '/repo', unplaced, [])).toContain('no approved plan')
+    expect(reviewerEditRefusal(broad, '/repo', unplaced, [])).toContain("doesn't edit the repository")
+  })
+
+  test('$PWD is placed; any other variable, ~ or a substitution is not', async () => {
+    expect(absoluteTarget('$PWD/src/a.ts', '/repo')).toBe('/repo/src/a.ts')
+    expect(absoluteTarget('${PWD}/src/a.ts', '/repo')).toBe('/repo/src/a.ts')
+    expect(absoluteTarget('$OUT/a.ts', '/repo')).toBeUndefined()
+    expect(absoluteTarget('~/code/repo/a.ts', '/repo')).toBeUndefined()
+    expect(absoluteTarget('$(pwd)/a.ts', '/repo')).toBeUndefined()
   })
 })
 

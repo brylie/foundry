@@ -2,23 +2,24 @@
 
 A Claude plugin and mod that guides agents from GitHub issues to shipped code through gated, multi-perspective review loops.
 
-An **oversight agent** takes a batch of related issues through six stages. **Five specialist reviewers** check the plan, then the work, until every one approves. **You** sign off after each loop, and the pull request ships only when its online reviewers pass and CI is green. The **Foundry mod** enforces each stage in Claude Code, keeps the state in GitHub, and shows every batch as a card in a side panel, with a clear alert whenever something waits on you.
+An **oversight agent** takes a batch of related issues through six stages. **Six specialist reviewers** check the plan, then the work, until every one approves. **Documentation is first-class:** the product owner and architecture write the requirements, specification and decision records before any code, and a documentation reviewer checks that every doc matches what was built. **You** sign off after each loop, and the pull request ships only when its online reviewers pass and CI is green. The **Foundry mod** enforces each stage in Claude Code, keeps the state in GitHub, and shows every batch as a card in a side panel, with a clear alert whenever something waits on you.
 
 ## The stages
 
 ```
 1 Intake ─▶ 2 Plan loop ─▶ 3 Plan sign-off ─▶ 4 Build loop ─▶ 5 Build sign-off ─▶ 6 Ship gates ─▶ merged
-            (5 reviewers,     (you)             (5 reviewers,    (you)               (online reviewers
-             until all                           until all                             + CI; failures go
-             approve)                            approve)                              back to 4)
+            (docs pass,       (you: plan        (6 reviewers,    (you)               (online reviewers
+             6 reviewers,      and docs)         until all                             + CI; failures go
+             until all                           approve)                              back to 4)
+             approve)
 ```
 
 | Stage | What happens | The mod holds back |
 |---|---|---|
 | **1. Intake** | Triaged issues from the current milestone, ordered by the project board's **Priority** and **Size**, grouped into batches, one PR each | |
-| **2. Plan loop** | The plan, reviewed until all five approve | edits in the repository, `git commit`, claiming issues |
-| **3. Plan sign-off** | You approve the plan | everything, while you decide |
-| **4. Build loop** | Build and test, reviewed until all five approve | `git push`, `gh pr create` |
+| **2. Plan loop** | The plan, and the docs pass: requirements, specification and decision records. Reviewed together until all six approve | code (only the requirement, specification and decision folders may change), `git commit`, claiming issues |
+| **3. Plan sign-off** | You approve the plan and its docs | everything, while you decide |
+| **4. Build loop** | Build, test, and update the user docs with the code. Reviewed until all six approve | `git push`, `gh pr create` |
 | **5. Build sign-off** | You approve the implementation | everything, while you decide |
 | **6. Ship gates** | The PR's online reviewers pass and CI goes green; a failure or change request sends the work back to the build loop | edits and commits until the work is sent back |
 | *(always)* | | `gh pr merge`: you merge |
@@ -32,6 +33,15 @@ An issue is **triaged** when the board has its Priority and Size set and its Sta
 - **CI failures count.** A CI failure or a change request on the PR counts as a ship round. A plain rerun of a flaky test does not.
 - **Conflicts escalate.** When reviewers want things that cannot both hold, it escalates to you: you veto one, which then counts as approved for that stage, or you write a compromise.
 - **Sign-off is yours alone.** Sign-offs come only from the panel's buttons or your own `/foundry` command. A GitHub comment never counts as one, even under your account (some reviewer bots post as you). Neither does a message from another session.
+
+## Documentation
+
+A change isn't done until what people read about it is true, so Foundry treats docs as part of the work.
+
+- **The docs pass, in the plan loop, before any code.** The product owner updates the **requirements**: what users can do, and why. Then architecture writes the technical design into the **specification** beside the product owner's section, and adds a **decision record** for each significant choice. Every reviewer reviews the plan and that doc diff together, and your plan sign-off agrees both.
+- **Only docs before the sign-off.** In the plan stage the mod lets the requirement, specification and decision folders change, and nothing else. A reviewer agent may edit those folders only while the batch is planning, and never commits, pushes or touches code.
+- **Docs with the code, in the build loop.** The first commit is the docs you agreed. User and reference docs, help pages, the README and the changelog change in the same commits as the code they describe. If the code has to differ from the agreed spec, the agent stops and asks you.
+- **A documentation reviewer, in both loops.** In the plan loop it checks that the plan names every doc the change touches. In the build loop it checks that each one was updated, matches the code, and that nothing went stale.
 
 ## The ship gates
 
@@ -79,7 +89,7 @@ One card per batch, moving down the stages:
 |---|---|
 | `foundry:oversight` | The coordinator, run as the session's agent: `claude --agent foundry:oversight`. |
 | `/foundry:begin [issues \| milestone \| theme \| dry run]` | Starts the same procedure from any session, including the desktop app. |
-| `foundry:product-owner`, `foundry:usability`, `foundry:accessibility`, `foundry:architecture`, `foundry:security` | The five reviewer sub-agents, read-only. Architecture also owns correctness and tests. |
+| `foundry:product-owner`, `foundry:usability`, `foundry:accessibility`, `foundry:architecture`, `foundry:security`, `foundry:documentation` | The six reviewer sub-agents. Architecture also owns correctness and tests. The product owner and architecture are also the doc authors in the plan loop's docs pass; otherwise every reviewer is read-only. |
 | `foundry:reviewer` | A reviewer for any perspective you add to the `reviewers` setting. |
 | The mod (`hooks/`) | The panel, the gate logic, the guards, GitHub state and PR polling. |
 | `/foundry:review-plan`, `/foundry:review-code` | Stand-alone reviews of a plan or a change, sent to the agent that wrote it. |
@@ -124,7 +134,7 @@ In the desktop app: click + next to the prompt box, then Plugins, then Add marke
 
 | Option | Default | Meaning |
 |---|---|---|
-| `reviewers` | `product-owner,usability,accessibility,architecture,security` | Comma-separated review perspectives. Every one must approve before a sign-off goes to you. An empty list means the defaults. |
+| `reviewers` | `product-owner,usability,accessibility,architecture,security,documentation` | Comma-separated review perspectives. Every one must approve before a sign-off goes to you. An empty list means the defaults. |
 | `maxRounds` | `3` | Review rounds per stage before it escalates to you. CI reruns for flaky tests don't count. |
 | `onlineReviewers` | `coderabbitai[bot]` | The automated reviewers that must review a PR's head commit. Codecov belongs in CI, as its status check. |
 | `maintainers` | *(the signed-in account)* | People whose PR comments count as reviewer feedback, never as sign-off. |
@@ -141,10 +151,16 @@ online_reviewers:        # must review the head commit; part of the allowlist
   - coderabbitai[bot]
   - gitar-bot[bot]
 maintainers: [brylie]    # their comments count as feedback, never sign-off
-reviewers: [product-owner, usability, accessibility, architecture, security]
+reviewers: [product-owner, usability, accessibility, architecture, security, documentation]
 max_rounds: 3
 bot_timeout_minutes: 30
+requirements: [docs/product]      # the product owner's
+specifications: [docs/design]     # co-authored with architecture
+decisions: [docs/adr]             # architecture's decision records
+user_docs: [README.md, docs/guide, docs/modules]
 ```
+
+The doc folders a file leaves out are found in the checkout: `docs/product`, `docs/requirements` or `docs/prd` for requirements; `docs/design` or `docs/specs` for specifications; `docs/adr` or `docs/decisions` for decision records; and the README, changelog and `docs/guide`, `docs/learn`, `docs/modules` and similar for user docs. A kind with no folder yet starts in the first of those.
 
 The file is a small YAML subset: top-level `key: value` lines, `[a, b]` or `- item` lists, and `#` comments. Foundry reports an unknown key or a bad value when a batch starts, rather than guessing what was meant.
 
