@@ -181,6 +181,21 @@ describe('online reviewers', () => {
     expect(dismissedOnly.waiting?.kind).toBe('merge')
   })
 
+  test('a change request on an older commit still holds after a push, until that reviewer approves or it is dismissed', async () => {
+    const requested = { login: 'coderabbitai', state: 'CHANGES_REQUESTED', oid: 'old0000' }
+    const pushed = readShip(batch, prior, pr({ checks: GREEN, reviews: [requested] }), T0)
+    expect(pushed.waiting).toBeUndefined()
+    expect(pushed.notice?.text).toContain('Changes were requested')
+
+    const approved = readShip(batch, prior, pr({ checks: GREEN, reviews: [requested, { login: 'coderabbitai', state: 'APPROVED' }] }), T0)
+    expect(approved.waiting?.kind).toBe('merge')
+    const dismissed = readShip(batch, prior, pr({ checks: GREEN, reviews: [requested, { login: 'coderabbitai', state: 'DISMISSED', oid: 'old0000' }] }), T0)
+    expect(dismissed.waiting?.kind).toBe('merge')
+    // A later plain comment, on the head, doesn't lift it.
+    const commented = readShip(batch, prior, pr({ checks: GREEN, reviews: [requested, { login: 'coderabbitai', state: 'COMMENTED' }] }), T0)
+    expect(commented.waiting).toBeUndefined()
+  })
+
   test('a gate is never green on a partial page of checks or threads', async () => {
     const both = [{ login: 'coderabbitai', state: 'COMMENTED' }, { login: 'gitar-bot', state: 'COMMENTED' }]
     const full = pr({ checks: GREEN, reviews: both })

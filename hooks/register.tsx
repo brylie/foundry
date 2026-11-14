@@ -707,7 +707,15 @@ async function pressDecide($: EngineInterface, key: string, decision: Decision, 
   })
   if (wait !== undefined && result?.error !== undefined) $.ui.toast(`Foundry: ${result.error}`)
   if (result === undefined || result.error) return
-  void deliver($, await mine($))
+  void wakeAfter($, key, decision)
+}
+
+/**
+ * Wakes the agent with what the person decided. An ended batch is let go
+ * only after: released first, its last news would find no batch to carry it.
+ */
+async function wakeAfter($: EngineInterface, key: string, decision: Decision): Promise<void> {
+  await deliver($, await mine($))
   if (decision.action === 'end') await releaseIfMine($, key)
 }
 
@@ -763,7 +771,9 @@ async function askPerson($: EngineInterface, preface = ''): Promise<void> {
 
   let decision: Decision | undefined
   let said: string | undefined
-  const choice = choices.find(c => c.label === answer)
+  // A command the question names, typed under Other, decides as it would at the prompt.
+  const typedAnswer = options.find(o => isSameCommand(o.typed, answer))
+  const choice = typedAnswer === undefined ? choices.find(c => c.label === answer) : { label: answer, options: [typedAnswer] }
   if (choice !== undefined && choice.options.length === 0) return
   if (choice !== undefined && choice.options.length === 1) decision = choice.options[0]?.decision
   if (choice !== undefined && choice.options.length > 1) {
@@ -776,7 +786,7 @@ async function askPerson($: EngineInterface, preface = ''): Promise<void> {
     } catch {
       return
     }
-    decision = picks.find(o => o.label === pick)?.decision
+    decision = (picks.find(o => o.label === pick) ?? choice.options.find(o => isSameCommand(o.typed, pick)))?.decision
     if (decision === undefined && pick !== NOT_YET) askAgain($, id, pick)
     if (decision === undefined) return
   }
@@ -791,10 +801,33 @@ async function askPerson($: EngineInterface, preface = ''): Promise<void> {
     said = answer
   }
   if (decision === undefined) return
+  // Ending stops the gates for good: the question asks again first, as the card and the command do.
+  if (decision.action === 'end') {
+    let sure: string
+    try {
+      sure = await $.ui.ask(`End "${batch.title}" (#${batch.lead})? Its gates stop guarding, and it can't be undone.`, {
+        options: [END_BATCH, KEEP_BATCH],
+        header: 'Foundry',
+      })
+    } catch {
+      return
+    }
+    if (sure !== END_BATCH) return
+  }
   // The answer may come hours later, and every read of one dispatch sees the moment it began: it is
   // carried out in a dispatch of its own, which reads the batch as it is now. The answer is to this
   // wait alone: one decided meanwhile, or a later one in its place, takes nothing from it.
   $.clock.after(0, press($, () => pressDecide($, key, decision, said, id)))
+}
+
+const END_BATCH = 'End batch'
+const KEEP_BATCH = 'Keep batch'
+
+/** Whether typed text is the command: any case and spacing, with or without its slash. */
+function isSameCommand(command: string, typed: string): boolean {
+  const plain = (text: string) => text.trim().replace(/^\//, '').replace(/\s+/g, ' ').toLowerCase()
+
+  return plain(command) === plain(typed)
 }
 
 /**
@@ -1229,8 +1262,10 @@ export const register: Register = (on, options) => {
 
   on('command.run', { command: COMMAND }, async ($, e) => {
     const words = e.args.trim().split(/\s+/).filter(Boolean)
-    const target = words.find(w => /^#\d+$/.test(w))
-    const [verb = 'status', ...rest] = words.filter(w => w !== target)
+    // The first `#N` picks the batch; any later one is the person's own words.
+    const at = words.findIndex(w => /^#\d+$/.test(w))
+    const target = at >= 0 ? words[at] : undefined
+    const [verb = 'status', ...rest] = words.filter((_, i) => i !== at)
     const arg = rest[0]
 
     if (verb === 'pane') {
@@ -1288,10 +1323,9 @@ export const register: Register = (on, options) => {
     const now = await $.clock.now()
     const result = await apply($, key, b => withWords(decide(b, decision, now), said, now))
     if (result?.error) return { text: result.error }
-    if (decision.action === 'end') await releaseIfMine($, key)
     // A command's context waits for the agent's next turn, and may start none: the agent is woken,
     // as a press wakes it, once the command is done (a command may not submit a prompt while it runs).
-    $.clock.after(0, press($, async () => deliver($, await mine($))))
+    $.clock.after(0, press($, () => wakeAfter($, key, decision)))
 
     return { text: `Done: ${decision.action} for "${batch.title}" (#${batch.lead}). The agent is told.${await unsaved($, key)}` }
   })
