@@ -2,7 +2,9 @@
 
 Foundry's notable changes, newest first. Versions follow [Semantic Versioning](https://semver.org/): before 1.0, a minor version can change behaviour.
 
-## Unreleased
+## 0.3.1
+
+Foundry works in a git worktree: a batch there judges the worktree's own docs, plan and code.
 
 ### Fixes
 
