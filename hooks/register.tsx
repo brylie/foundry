@@ -633,10 +633,34 @@ async function show($: EngineInterface): Promise<void> {
   $.ui.status(statusText(await mine($)))
 }
 
+/**
+ * The root of the working tree the session edits: a linked worktree's own
+ * folder, not the main checkout's. `$.session.repo()` names the main working
+ * tree's root even from a worktree, so the doc folders, the plan file and
+ * every guarded path would be judged in the wrong checkout: a worktree under
+ * the main checkout's `.claude/` would hold nothing, and a reviewer's doc
+ * edit there would be refused as code. The first folder up from the
+ * session's directory that holds `.git` (a folder in the main checkout, a
+ * file in a linked worktree) is the working tree's root.
+ */
 async function repoRoot($: EngineInterface): Promise<string> {
   const repo = await $.session.repo()
+  const cwd = await $.session.cwd()
+  if (!repo) return cwd
 
-  return repo?.root ?? (await $.session.cwd())
+  let start = cwd
+  while (start.endsWith('/')) start = start.slice(0, -1)
+  for (let dir = start; dir.startsWith('/'); dir = dir.slice(0, dir.lastIndexOf('/'))) {
+    try {
+      await $.fs.stat(`${dir}/.git`)
+
+      return dir
+    } catch {
+      // No `.git` here: try the parent folder.
+    }
+  }
+
+  return repo.root
 }
 
 async function commentIds($: EngineInterface): Promise<number[]> {
