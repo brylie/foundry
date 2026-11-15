@@ -146,7 +146,8 @@ function github() {
 }
 
 /** Stands in for the engine beneath the plugin, and records what it was asked. */
-function engine(on: On) {
+/** The engine as the mod meets it. `cwd` is the session's folder: the main checkout unless a test says otherwise. */
+function engine(on: On, cwd = '/repo') {
   const hub = github()
   const prompts: string[] = []
   const ran: string[] = []
@@ -179,7 +180,7 @@ function engine(on: On) {
   on('command.register', (_, e) => ({ value: { command: e.name } }))
   on('tool.register', (_, e) => ({ value: { tool: `mcp__foundry__${e.name}` } }))
   on('ui.open', () => ({ value: { isPlaced: true } }))
-  on('session.cwd', () => ({ value: '/repo' }))
+  on('session.cwd', () => ({ value: cwd }))
   on('session.id', () => ({ value: 'session-1' }))
   on('session.repo', () => ({ value: { root: '/repo', name: 'r', remote: 'git@github.com:o/r.git', internal: false } }))
   on('process.run', async (_, e) => {
@@ -1264,6 +1265,40 @@ test('a doc folder that is itself a link still takes its plan-loop edits, by Edi
   // The link's target outside the doc folders is still code.
   expect((await $.tool.call({ tool: 'Write', file_path: '/repo/product/../src/a.ts', content: 'x', agentId: 'po-1' })).deny).toContain("doesn't edit")
   expect(ran).toEqual(['printf x >> docs/product/slots.md', 'printf x >> docs/product/slots.md'])
+})
+
+test('in a linked worktree, the doc folders, the plan and the guard are the worktree own, not the main checkout', async ($, on) => {
+  // The session works in a worktree under the main checkout's .claude/ folder; the engine names the main root.
+  const tree = '/repo/.claude/worktrees/w'
+  const { ran, files, hub } = engine(on, tree)
+  on('agent.list', () => ({ value: [{ id: 'po-1', type: 'foundry:product-owner', description: 'requirements', status: 'running' }] as never }))
+  // `.git` is a folder in the main checkout and a file in the worktree; nothing else exists.
+  on('fs.stat', (_, e) => {
+    if (e.path !== '/repo/.git' && e.path !== `${tree}/.git`) throw new Error(`ENOENT: ${e.path}`)
+
+    return { value: { kind: e.path === '/repo/.git' ? 'directory' : 'file', size: 0, mtimeMs: 0, isLink: false, realPath: e.path } as never }
+  })
+  await $.session.start({ cwd: tree, surface: 'desktop', isInteractive: true })
+  await $.tool.call({ tool: 'mcp__foundry__batch_start', title: 'T', issues: [12] })
+
+  // An author writes the worktree's docs, and only those.
+  const prd = { tool: 'Write', file_path: `${tree}/docs/product/slots.md`, content: '# Slots' } as const
+  expect((await $.tool.call({ ...prd, agentId: 'po-1' })).deny).toBeUndefined()
+  expect((await $.tool.call({ tool: 'Bash', command: 'printf x >> docs/design/slots.md', agentId: 'po-1' })).deny).toBeUndefined()
+  expect((await $.tool.call({ tool: 'Write', file_path: `${tree}/src/slot.rs`, content: 'x', agentId: 'po-1' })).deny).toContain("doesn't edit")
+  // The worktree's code is held for the oversight agent too: its path has a .claude/ folder only above the root.
+  expect((await $.tool.call({ tool: 'Write', file_path: `${tree}/src/slot.rs`, content: 'x' })).deny).toContain('no approved plan')
+  expect((await $.tool.call({ tool: 'Write', file_path: `${tree}/docs/plans/12.md`, content: '# Plan' })).deny).toBeUndefined()
+  // The main checkout is another working tree: outside this one, so not held.
+  expect((await $.tool.call({ tool: 'Write', file_path: '/repo/src/slot.rs', content: 'x' })).deny).toBeUndefined()
+  expect(ran).toEqual(['printf x >> docs/design/slots.md'])
+
+  // The plan copied to GitHub is the worktree's file, not the main checkout's.
+  files.set('/repo/docs/plans/12.md', '# Plan for T\n\nFrom the main checkout.')
+  files.set(`${tree}/docs/plans/12.md`, '# Plan for T\n\nFrom the worktree.')
+  await $.tool.call({ tool: 'mcp__foundry__review_record', perspective: 'usability', reviewer: 'r', verdict: 'ready', summary: 's' })
+  const copy = (hub.comments.get(12) ?? []).find(c => c.body.includes('foundry:plan-copy'))
+  expect(copy?.body).toContain('From the worktree.')
 })
 
 test('a plan folder that is a link still takes the plan, by Edit and by shell, and nothing else', async ($, on) => {

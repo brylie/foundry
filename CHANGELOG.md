@@ -2,6 +2,14 @@
 
 Foundry's notable changes, newest first. Versions follow [Semantic Versioning](https://semver.org/): before 1.0, a minor version can change behaviour.
 
+## 0.3.1
+
+Foundry works in a git worktree: a batch there judges the worktree's own docs, plan and code.
+
+### Fixes
+
+- **A batch in a git worktree works on the worktree.** The engine names the main checkout's root even from a linked worktree, so Foundry judged every path there against the wrong checkout. In a worktree under the main checkout's `.claude/` folder, the product owner and architecture authors were refused their doc edits as code, the oversight agent's code edits were never held, and the plan card and the plan's copy on GitHub read the main checkout's plan file. Foundry now takes the working tree's root: the first folder up from the session's directory that holds `.git`.
+
 ## 0.3.0
 
 Foundry follows you away from the desk: you decide gates from your phone, read the plan anywhere, and the ship gate no longer waits on the online reviewers.
