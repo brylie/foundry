@@ -2,6 +2,12 @@
 
 Foundry's notable changes, newest first. Versions follow [Semantic Versioning](https://semver.org/): before 1.0, a minor version can change behaviour.
 
+## Unreleased
+
+### Reviewers
+
+- **The narrow reviewers run on Sonnet.** The security, accessibility, documentation and usability reviewers each check one lens and never edit, so their agent files now set `model: sonnet`. Before, no Foundry agent set a model, so every reviewer ran on the session's model, usually the largest. Architecture and product owner stay on the session's model, because they also write the specification, decisions and requirements in the docs pass. A team that measures its agents (LoomDSP's devtel compares tokens and turns by subagent type and model) can tell whether the smaller model needs more review rounds.
+
 ## 0.3.1
 
 Foundry works in a git worktree: a batch there judges the worktree's own docs, plan and code.
