@@ -2,7 +2,9 @@
 
 Foundry's notable changes, newest first. Versions follow [Semantic Versioning](https://semver.org/): before 1.0, a minor version can change behaviour.
 
-## Unreleased
+## 0.4.0
+
+The narrow reviewers run on a smaller model, so a review round uses less of the session's usage.
 
 ### Reviewers
 
